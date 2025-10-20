@@ -1,5 +1,5 @@
 from __future__ import annotations
-#
+##
 # BEGIN PATCH:newcomer_until
 def newcomer_until(user_id: int, chat_id: int) -> int | None:
     """Return UNIX timestamp until which user is considered a newcomer, or None if not approved yet."""
