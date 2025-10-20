@@ -1,5 +1,21 @@
 from __future__ import annotations
 
+# BEGIN PATCH:newcomer_until
+def newcomer_until(user_id: int, chat_id: int) -> int | None:
+    """Return UNIX timestamp until which user is considered a newcomer, or None if not approved yet."""
+    import sqlite3, logging
+    log = logging.getLogger("support-join-guard")
+    try:
+        with sqlite3.connect(SQLITE_PATH, timeout=3.0) as conn:
+            cur = conn.execute("SELECT approved_at FROM approvals WHERE user_id=? AND chat_id=?", (int(user_id), int(chat_id)))
+            row = cur.fetchone()
+            if not row or row[0] is None:
+                return None
+            return int(row[0]) + int(NEWCOMER_WINDOW_SECONDS)
+    except Exception:
+        log.exception("newcomer_until: failed user_id=%s chat_id=%s", user_id, chat_id)
+        return None
+# END PATCH:newcomer_until
 try:
     import _watchdog_testuser as _wd
     HAS_WD = True
@@ -1277,6 +1293,16 @@ async def main():
             await _wd.start(bot, dp, log, cmd_router, TEST_CHAT_ID, TEST_USER_ID)
     except Exception as e:
         log.warning("TESTUSER WD start error: %r", e)
+    # BEGIN PATCH: call DB integrity check before polling
+    try:
+        import logging
+        logging.getLogger("support-join-guard").info("DB CHECK: start")
+        _db_integrity_check_and_repair()
+        logging.getLogger("support-join-guard").info("DB CHECK: done")
+    except Exception:
+        import logging
+        logging.getLogger("support-join-guard").exception("DB CHECK: failed")
+    # END PATCH
     await dp.start_polling(
         bot,
         allowed_updates = ['message','edited_message','chat_member','my_chat_member','chat_join_request','callback_query'],
