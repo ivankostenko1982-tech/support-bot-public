@@ -21,7 +21,6 @@ try:
     HAS_WD = True
 except Exception as _e:
     HAS_WD = False
-#!/usr/bin/env python3
 
 
 # --- safe stub: avoid NameError from _removed_is_newcomer ---
@@ -62,7 +61,6 @@ from aiogram.enums import ChatMemberStatus
 # --- Bootstrap: env & DB checks (injected) ---
 import os, sys, sqlite3, time, logging, pathlib
 
-from aiogram.exceptions import TelegramBadRequest
 
 async def _safe_approve(bot, chat_id: int, user_id: int) -> bool:
     import logging
@@ -125,7 +123,7 @@ def _ensure_sqlite_and_schema():
         cur.execute("""CREATE TABLE IF NOT EXISTS approvals (
             user_id INTEGER NOT NULL,
             chat_id INTEGER NOT NULL,
-            approved_at INTEGER NOT NULL,
+            approved_at INTEGER,
             PRIMARY KEY(user_id, chat_id)
         )""")
         cur.execute("""CREATE TABLE IF NOT EXISTS pending_requests (
@@ -155,7 +153,7 @@ def _drop_newcomer_columns_if_present():
                 CREATE TABLE IF NOT EXISTS approvals_new (
                     user_id INTEGER NOT NULL,
                     chat_id INTEGER NOT NULL,
-                    approved_at INTEGER NOT NULL,
+                    approved_at INTEGER,
                     PRIMARY KEY(user_id, chat_id)
                 )
             """)
@@ -228,7 +226,7 @@ def utils_path(name: str) -> str:
         cur.execute("""CREATE TABLE IF NOT EXISTS approvals(
             user_id INTEGER NOT NULL,
             chat_id INTEGER NOT NULL,
-            approved_at INTEGER NOT NULL,
+            approved_at INTEGER,
             PRIMARY KEY(user_id, chat_id)
         )""")
         # Drop broken null-key rows
@@ -415,7 +413,7 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS approvals (
                 user_id     INTEGER NOT NULL,
                 chat_id     INTEGER NOT NULL,
-                approved_at INTEGER NOT NULL,
+                approved_at INTEGER,
                 PRIMARY KEY (user_id, chat_id)
             )
             """
