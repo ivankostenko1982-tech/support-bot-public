@@ -49,6 +49,24 @@ from aiogram.enums import ChatMemberStatus
 # --- Bootstrap: env & DB checks (injected) ---
 import os, sys, sqlite3, time, logging, pathlib
 
+from aiogram.exceptions import TelegramBadRequest
+
+async def _safe_approve(bot, chat_id: int, user_id: int) -> bool:
+    import logging
+    log = logging.getLogger("support-join-guard")
+    try:
+        await bot.approve_chat_join_request(chat_id, user_id)
+        log.info("approve: ok user_id=%s chat_id=%s", user_id, chat_id)
+        return True
+    except TelegramBadRequest as e:
+        # уже одобрено/неактуально — не роняем бота
+        log.warning("approve: badrequest user_id=%s chat_id=%s err=%s", user_id, chat_id, e)
+        return False
+    except Exception:
+        log.exception("approve: failed user_id=%s chat_id=%s", user_id, chat_id)
+        return False
+
+
 def _load_support_env():
     # prefer explicit path; default system path
     env_path = os.environ.get("SUPPORT_ENV_PATH", "/etc/tgbots/support.env")

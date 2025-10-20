@@ -1,14 +1,16 @@
-# Support Bot (Telegram) — код, автодеплой и эксплуатация
+# Support Bot (Telegram) — код, автодеплой и Git‑операции
 
-Этот репозиторий хранит **рабочий код бота** (`app.py`). Пуш в серверный bare‑репозиторий триггерит **автодеплой**: снапшот → бэкап → `py_compile` → установка нового `app.py` → `systemctl restart tgbot@support.service` → сбор журнала и автодоков в ветку `state` (генерируется **на сервере**).
+Этот репозиторий хранит **рабочий код бота** (`app.py`). Пуш в серверный bare‑репозиторий запускает **автодеплой**: снапшот → бэкап → `py_compile` → установка нового `app.py` → `systemctl restart tgbot@support.service` → сбор журнала и автодоков в ветку `state` (создаются **на сервере**).
 
 - Боевой код: `/opt/tgbots/bots/support/app.py`
 - Сервис: `tgbot@support.service`
 - ENV: `/etc/tgbots/support.env` (секреты **не коммитим**)
 - Venv: `/opt/tgbots/.venv`
 - БД (SQLite, WAL): `/opt/tgbots/bots/support/join_guard_state.db`
-- Bare‑repo: `/opt/tgbots/git/support.git` → worktree хуков: `/opt/tgbots/repos/support`
+- Bare‑repo (куда пушим): `/opt/tgbots/git/support.git`
+- Worktree хуков: `/opt/tgbots/repos/support`
 - Утилиты/скрипты: `/opt/tgbots/utils/`
+- Безопасный применитель из хука: `/opt/tgbots/utils/patch_apply_from_repo.sh`
 
 ---
 
@@ -33,136 +35,190 @@ journalctl -u tgbot@support.service -n 200 --no-pager
 
 ---
 
-## 2) Конфигурация через ENV (секреты вне Git)
+## 2) Windows: SSH‑ключи и «правильный» SSH для Git
 
-Файл окружения для инстанса **support**: `/etc/tgbots/support.env`. Доступ: `root` и `tgbot` (обычно `chmod 640`, `chown root:tgbot`).
-
-Минимальный пример:
+### 2.1 Создать ключ (PowerShell)
+```powershell
+ssh-keygen --% -t ed25519 -C "ivan@support-bot" -f "$env:USERPROFILE\.ssh\id_ed25519" -N ""
+Get-Content "$env:USERPROFILE\.ssh\id_ed25519.pub"
 ```
-BOT_TOKEN=...                        # секрет! (не печатать в логах)
-SQLITE_PATH=/opt/tgbots/bots/support/join_guard_state.db
-UTILS_DIR=/opt/tgbots/utils
 
-TEST_CHAT_ID=-1002099408662
-TEST_USER_ID=6700029291
-TRACE_TEST_CHAT=1
-NEWCOMER_WINDOW_SECONDS=86400
-NEWCOMER_TEST_ONLY=1
-
-DELETE_SYSTEM_MESSAGES=true
-LOCKDOWN_NONADMIN_BOTS=true
-AGGRESSIVE_CHANNEL_ANTILINK=true
-
-TARGET_CHAT_IDS=-1002099408662,-1001878435829
-ADMIN_IDS=11111111,22222222
+### 2.2 Добавить публичный ключ на сервер
+```powershell
+ssh root@82.146.35.169 "mkdir -p ~/.ssh && chmod 700 ~/.ssh"
+scp "$env:USERPROFILE\.ssh\id_ed25519.pub" root@82.146.35.169:/root/.ssh/id_ed25519.pub
+ssh root@82.146.35.169 "cat ~/.ssh/id_ed25519.pub >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && rm ~/.ssh/id_ed25519.pub"
+ssh root@82.146.35.169 "echo OK"   # должно вывести OK без пароля
 ```
-Проверка без утечки секретов:
-```bash
-/opt/tgbots/utils/echo_env.sh /etc/tgbots/support.env
+
+### 2.3 Заставить Git использовать системный OpenSSH (обход проблем с путями)
+```powershell
+# разово на сессию
+$env:GIT_SSH = 'C:/Windows/System32/OpenSSH/ssh.exe'
+# или навсегда для текущего пользователя
+[Environment]::SetEnvironmentVariable('GIT_SSH','C:/Windows/System32/OpenSSH/ssh.exe','User')
+```
+
+### 2.4 CRLF/LF: единые правила в репо
+В корне репозитория держим `.gitattributes`:
+```
+*           text=auto
+*.py        text eol=lf
+*.sh        text eol=lf
+*.service   text eol=lf
+*.unit      text eol=lf
+*.timer     text eol=lf
+*.md        text eol=lf
+*.txt       text eol=lf
+*.conf      text eol=lf
+*.env       text eol=lf
+*.sql       text eol=lf
+*.png *.jpg *.jpeg *.gif *.pdf *.db *.sqlite* binary
+```
+Рекомендуемая глобальная настройка Windows:
+```powershell
+git config --global core.autocrlf true
+git add --renormalize .
+git commit -m "normalize line endings"
 ```
 
 ---
 
-## 3) Сервисный запуск (systemd)
+## 3) Что деплоится и как работает хук
 
-Инстанс: `tgbot@support.service`. Типовой `ExecStart`:
+- Серверный хук `post-receive` делает `checkout` ветки `main` в `/opt/tgbots/repos/support` и вызывает **безопасный применитель**:
+  ```bash
+  /opt/tgbots/utils/patch_apply_from_repo.sh /opt/tgbots/repos/support/app.py
+  ```
+- Применитель:
+  1) делает бэкап текущего `/opt/tgbots/bots/support/app.py`;
+  2) прогоняет `py_compile` на новой версии;
+  3) ставит файл на место;
+  4) перезапускает `tgbot@support.service`;
+  5) пишет хвост `journalctl` в `/opt/tgbots/utils/diag_logs/`;
+  6) при ошибке — откатывает на бэкап.
+
+- После успешного деплоя скрипт **генерирует автодокументацию** в `docs_state/*` и коммитит её в ветку `state` (обновляет ref в bare‑репозитории).
+
+Посмотреть автодоки локально:
+```bash
+git fetch origin state:state
+git checkout state
+ls -l docs_state/
 ```
-/opt/tgbots/.venv/bin/python /opt/tgbots/bots/support/app.py --instance support
+
+---
+
+## 4) Структура проекта в репозитории
+
+Минимум:
 ```
-Полезное:
+app.py
+README.md
+.gitignore
+.gitattributes
+```
+В этом варианте деплоится только `app.py`. Если потребуется деплоить ещё файлы/папки (модули, ресурсы), расширим логику применителя и/или хука — через PR.
+
+`.gitignore` (короткая версия):
+```
+__pycache__/
+*.pyc
+*.log
+*.db
+*.sqlite*
+/docs_state/
+/snapshots/
+/diag_logs/
+/.venv/ /venv/ /env/
+/dist/ /build/
+/.idea/ /.vscode/
+*.bak.* *.swp *.swo *.tmp *.trace
+*.env
+```
+
+---
+
+## 5) Окружение, сервис, БД, диагностика (шпаргалка)
+
+Окружение (секреты):
+```
+/etc/tgbots/support.env      # не коммитим
+```
+Сервис/логи:
 ```bash
 systemctl status tgbot@support.service --no-pager
-journalctl -u tgbot@support.service -n 200 --no-pager
-systemctl show -p ExecStart --value tgbot@support.service
+journalctl -u tgbot@support.service -n 300 --no-pager
 ```
-
----
-
-## 4) БД SQLite (WAL) — хранение состояния
-
-Путь берётся из `SQLITE_PATH`. Типовые таблицы: `pending_requests`, `approvals`, `newcomer_seen`. Режим WAL, таймаут блокировок ~3 с. Быстрые проверки:
+SQLite (WAL):
 ```bash
-sqlite3 "$SQLITE_PATH" "PRAGMA journal_mode; PRAGMA busy_timeout; PRAGMA integrity_check; .tables;"
-```
-
-Бэкап «на горячую»:
-```bash
+sqlite3 "$SQLITE_PATH" "PRAGMA journal_mode; PRAGMA integrity_check; .tables;"
 sqlite3 "$SQLITE_PATH" ".backup /opt/tgbots/bots/support/join_guard_state.db.bak.$(date -u +%Y%m%d-%H%M%SZ)"
 ```
-
----
-
-## 5) Патчи и безопасный workflow правок (без ручного редактирования app.py)
-
-**Правим код только через утилиты в `/opt/tgbots/utils/`:**
-- `app_safe_apply.sh` — полный безопасный цикл (SNAPSHOT → BACKUP → TMP → py_compile → install → restart → TRACE → авто‑откат при фатальных паттернах).
-- `app_quick_apply.sh` — упрощённый цикл для часто повторяемых малых правок.
-- `snapshot_app.sh` — быстрый снимок (sha256, size, head, `py_compile`).
-- `app_baseline.sh` — признать текущее состояние эталоном (обновляет baseline).
-- `diag_collect.sh` — собрать полную диагностику.
-
-Шаблон применения патча (патч — это отдельный `patch_*.py`, работающий по TMP‑файлу):
+Диагностика:
 ```bash
-/opt/tgbots/utils/app_safe_apply.sh python3 /opt/tgbots/utils/patch_my_change.py
-journalctl -u tgbot@support.service -n 200 --no-pager
-```
-Ручной откат на последний бэкап:
-```bash
-cp -a /opt/tgbots/bots/support/app.bak.*.py /opt/tgbots/bots/support/app.py --backup=t
-systemctl restart tgbot@support.service
-```
-
----
-
-## 6) Снапшоты, baseline и трассы
-
-Артефакты:
-- Бэкапы кода: `/opt/tgbots/bots/support/app.bak.YYYYMMDD-HHMMSSZ.py`
-- Снимки: `/opt/tgbots/utils/snapshots/`
-- Baseline: `/opt/tgbots/utils/app.baseline.json`
-- Трейсы: `/opt/tgbots/utils/trace-*.txt`
-
-Типовой цикл:
-1) `snapshot_app.sh` перед рисковыми правками
-2) `app_safe_apply.sh ...` (или `app_quick_apply.sh ...`)
-3) Проверить журнал/трейс
-4) Зафиксировать baseline `app_baseline.sh` после подтверждения стабильности
-
----
-
-## 7) Диагностика и логи
-
-Базовые команды:
-```bash
-journalctl -u tgbot@support.service -n 300 --no-pager
-ls -1 /opt/tgbots/utils/trace-*.txt | tail -n 3
 /opt/tgbots/utils/diag_collect.sh && tail -n 100 /opt/tgbots/utils/diag/diag-*.txt
 ```
-Фатальные паттерны, требующие вмешательства: `Traceback|SyntaxError|IndentationError|NameError|SNAPSHOT MISMATCH|database is locked|ModuleNotFoundError`.
 
 ---
 
-## 8) Что НЕ коммитим в Git
+## 6) Ветки и политика коммитов
 
-- Любые секреты (`.env`, `BOT_TOKEN`, `VERIFY_SECRET`)
-- Базы/логи/снимки/диагностику: `*.db`, `*.sqlite*`, `docs_state/`, `snapshots/`, `diag_logs/`
-- Серверные пути из `/opt`
-
----
-
-## 9) Полезные сценарии эксплуатации
-
-- **Smoke‑test после деплоя**: `python -m py_compile /opt/tgbots/bots/support/app.py` + просмотр `journalctl`
-- **Проверка ENV** без секрета: `/opt/tgbots/utils/echo_env.sh /etc/tgbots/support.env`
-- **Миграции SQLite** делаем отдельно: `.backup → DDL → smoke‑test → журнал`
-- **Сайдкар наблюдатель тест‑пользователя**: отдельный unit `tgbot-testwatch.service` (читает тот же ENV, хранит своё состояние вне SQLite).
+- `main` — единственный источник деплоя на сервере.
+- `state` — «серверная» ветка с автодоками. Её **не редактируем вручную** — только читаем.
+- Коммиты должны быть атомарные и воспроизводимые; для правок кода используем PR или коммиты из локальной ветки с merge/rebase в `main`.
 
 ---
 
-## 10) FAQ (коротко)
+## 7) (Опционально) Не root‑пользователь для пушей
 
-**Бот не стартует, в логах SNAPSHOT MISMATCH.**  
-Либо обновить baseline (`app_baseline.sh`), если это верное состояние, либо откатить `app.py` на рабочий бэкап и перезапустить сервис.
+Рекомендуется завести `gitdeploy`:
+```bash
+sudo adduser --system --group --home /opt/tgbots/gitdeploy --shell /bin/bash gitdeploy
+sudo chown -R gitdeploy:gitdeploy /opt/tgbots/git /opt/tgbots/repos
+```
+Дать право перезапуска сервиса:
+```bash
+sudo bash -c 'cat > /etc/sudoers.d/gitdeploy-tgbot <<EOF
+gitdeploy ALL=NOPASSWD: /bin/systemctl restart tgbot@support.service, /bin/systemctl status tgbot@support.service, /bin/journalctl -u tgbot@support.service -n *
+EOF'
+sudo visudo -c
+```
+Правка хука (если требуется `sudo`):
+```bash
+sudo sed -i 's|systemctl |sudo systemctl |g; s|journalctl |sudo journalctl |g' /opt/tgbots/git/support.git/hooks/post-receive
+```
+URL для пушей станет:
+```
+ssh://gitdeploy@82.146.35.169/opt/tgbots/git/support.git
+```
 
-**`database is locked` в журнале.**  
-Увеличьте busy_timeout, избегайте параллельных писателей, для тяжёлых операций останавливайте сервис на время.
+---
+
+## 8) Зеркало на GitHub (опционально)
+
+Добавить второй remote и пушить «в обе стороны» (сервер для деплоя, GitHub — для хранения кода):
+```bash
+git remote add github https://github.com/<user>/support-bot.git
+git push -u github main
+# затем обычно
+git push origin main && git push github main
+```
+
+---
+
+## 9) Частые проблемы и решения
+
+- **`Permission denied (publickey)` при push** — сервер не видит твой публичный ключ. Проверь `~/.ssh/authorized_keys` на сервере и права `700/600`.
+- **Git на Windows просит пароль/не видит ключ** — задай `GIT_SSH='C:/Windows/System32/OpenSSH/ssh.exe'` и убери кривые `core.sshCommand`.
+- **Предупреждения про CRLF/LF** — добавь `.gitattributes` (см. выше) и сделай `git add --renormalize .`.
+- **В логах SNAPSHOT MISMATCH / отказ старта** — обнови baseline, если текущее состояние верное, или откати `app.py` на бэкап, потом перезапуск сервиса.
+- **`database is locked`** — увеличь busy_timeout, убери конкурирующие записи, для миграций останавливай сервис.
+
+---
+
+## 10) Безопасность и запреты
+
+- Не коммитим секреты (`/etc/tgbots/support.env`, токены).
+- Не редактируем `app.py` на сервере «горячо» — только через пуш/применитель или безопасные скрипты из `/opt/tgbots/utils/`.
+- Перед чистками и обновлениями — свежий снапшот и наличие нескольких бэкапов.
