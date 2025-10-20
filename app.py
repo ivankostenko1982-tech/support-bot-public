@@ -34,10 +34,7 @@ def _removed_is_newcomer(user_id: int, chat_id: int) -> bool:
     if test_only:
         return bool(user_id and chat_id and int(user_id)==tu and int(chat_id)==tc)
     return False
-    # conservative default: do NOT treat as newcomer
-    return False
 
-#!/usr/bin/env python3
 
 import os, time, sqlite3, asyncio, logging, html, hmac, re, platform
 from dataclasses import dataclass
