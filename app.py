@@ -18,6 +18,12 @@ def newcomer_until(user_id: int, chat_id: int) -> int | None:
 # END PATCH:newcomer_until
 try:
     import _watchdog_testuser as _wd
+    # soft import testpurge
+    try:
+        import _watchdog_testpurge as _wd_purge
+        HAS_WD_PURGE = True
+    except Exception as _e:
+        HAS_WD_PURGE = False
     HAS_WD = True
 except Exception as _e:
     HAS_WD = False
@@ -1298,6 +1304,14 @@ async def main():
         import logging
         logging.getLogger("support-join-guard").exception("DB CHECK: failed")
     # END PATCH
+    # BEGIN TESTPURGE: register purge watcher
+    try:
+        if HAS_WD_PURGE:
+            await _wd_purge.start(bot, dp, log, cmd_router, TEST_CHAT_ID, TEST_USER_ID)
+            log.info("TESTPURGE: started for chat=%s uid=%s", TEST_CHAT_ID, TEST_USER_ID)
+    except Exception as e:
+        log.warning("TESTPURGE start error: %r", e)
+    # END TESTPURGE
     await dp.start_polling(
         bot,
         allowed_updates = ['message','edited_message','chat_member','my_chat_member','chat_join_request','callback_query'],
