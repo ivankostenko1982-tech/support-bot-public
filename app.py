@@ -1,4 +1,18 @@
 from __future__ import annotations
+
+# === BEGIN NEWCOMER DIAG IMPORTS ===
+try:
+    import _newcomer_sidecar as _nside
+    HAS_NEWCOMER_SIDE = True
+except Exception:
+    HAS_NEWCOMER_SIDE = False
+try:
+    import _newcomer_testonly as _ntest
+    HAS_NEWCOMER_TESTONLY = True
+except Exception:
+    HAS_NEWCOMER_TESTONLY = False
+# === END NEWCOMER DIAG IMPORTS ===
+
 ##
 # BEGIN PATCH:newcomer_until
 def newcomer_until(user_id: int, chat_id: int) -> int | None:
@@ -1312,6 +1326,34 @@ async def main():
     except Exception as e:
         log.warning("TESTPURGE start error: %r", e)
     # END TESTPURGE
+    # BEGIN NEWCOMER SIDECARS (diagnostic only)
+    try:
+        _router_candidate = None
+        try:
+            _router_candidate = router
+        except NameError:
+            try:
+                _router_candidate = cmd_router
+            except NameError:
+                _router_candidate = None
+        if _router_candidate is not None:
+            if HAS_NEWCOMER_SIDE:
+                try:
+                    _nside.init_newcomer_sidecar(_router_candidate)
+                    log.info("NEWCOMER_SIDE: attached to router")
+                except Exception as e:
+                    log.warning("NEWCOMER_SIDE attach failed: %r", e)
+            if HAS_NEWCOMER_TESTONLY:
+                try:
+                    _ntest.setup_newcomer_testonly(_router_candidate, log)
+                    log.info("NEWCOMER_TESTONLY: attached to router")
+                except Exception as e:
+                    log.warning("NEWCOMER_TESTONLY attach failed: %r", e)
+        else:
+            log.info("NEWCOMER sidecars: no router variable found; skipping attach")
+    except Exception as e:
+        log.warning("NEWCOMER sidecars init error: %r", e)
+    # END NEWCOMER SIDECARS
     await dp.start_polling(
         bot,
         allowed_updates = ['message','edited_message','chat_member','my_chat_member','chat_join_request','callback_query'],
