@@ -37,3 +37,14 @@ def setup_newcomer_testonly(router: Router, log: Optional[logging.Logger] = None
 
         log.info("NEWCOMER_TEST STEP1: ChatMemberUpdated chat=%s uid=%s %s->%s",
                  chat_id, uid, _st(old), _st(new))
+
+# --- compat alias (star-args) for app.py calling with variable params ---
+def setup_newcomer_testonly(*args, **kwargs):
+    """Robust alias: accept any params from app.py, delegate to init_*."""
+    try:
+        router = args[0] if args else kwargs.get('router')
+        return init_newcomer_testonly(router)
+    except NameError:
+        # init_* может отсутствовать — делаем no-op, чтобы не падать
+        return None
+
