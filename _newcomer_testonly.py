@@ -1,25 +1,24 @@
-@"
 from __future__ import annotations
 """
-Test-only sidecar: одноразовое уведомление админам (из ADMIN_IDS)
-о ПЕРВОМ сообщении тестового новичка в тестовом чате во время окна новичка.
-Не вмешивается в основную логику удаления (её делает _watchdog_testpurge.py).
+Test-only: одноразовое DM-уведомление всем ADMIN_IDS о ПЕРВОМ сообщении
+тестового новичка (TEST_USER_ID) в тестовом чате (TEST_CHAT_ID) пока действует окно новичка.
+Не вмешивается в удаление сообщений (это делает _watchdog_testpurge.py).
 """
-import os
-import time
-import logging
+import os, time, logging
 from typing import Optional, Iterable, Set
 
+_LOG = logging.getLogger("support-join-guard")
+_LOG.info("NEWCOMER_TESTONLY: module imported")
+
+# --- aiogram безопасно ---
 try:
     from aiogram import Router, F  # type: ignore
     from aiogram.types import Message  # type: ignore
-except Exception:
+except Exception as e:
     Router = object  # type: ignore
     F = None         # type: ignore
     Message = object # type: ignore
-
-_log = logging.getLogger("support-join-guard")
-_NEWCOMER_WIN = 24 * 60 * 60
+    _LOG.warning("NEWCOMER_TESTONLY: aiogram import failed: %r (service Python vs venv?)", e)
 
 def _get_int_env(name: str, default: int) -> int:
     try:
@@ -27,69 +26,67 @@ def _get_int_env(name: str, default: int) -> int:
     except Exception:
         return default
 
-# --- безопасное подключение логики окна новичка из app.py ---
-try:
-    from app import newcomer_until as app_newcomer_until  # type: ignore
-    from app import NEWCOMER_WINDOW_SECONDS as APP_WIN    # type: ignore
-    _NEWCOMER_WIN = int(APP_WIN) if isinstance(APP_WIN, int) else _get_int_env("NEWCOMER_WINDOW_SECONDS", _NEWCOMER_WIN)
-    def _newcomer_until(uid: int, cid: int) -> Optional[int]:
-        return app_newcomer_until(uid, cid)
-except Exception:
-    _NEWCOMER_WIN = _get_int_env("NEWCOMER_WINDOW_SECONDS", _NEWCOMER_WIN)
-    def _newcomer_until(uid: int, cid: int) -> Optional[int]:
-        # Фолбэк: считаем, что окно активно на ближайшее время
-        now = int(time.time())
-        return now + _NEWCOMER_WIN
-
 def _flag(name: str) -> bool:
-    return os.getenv(name, "0").lower() in {"1", "true", "yes", "on"}
+    return os.getenv(name, "0").lower() in {"1","true","yes","on"}
 
-TEST_MODE   = _flag("NEWCOMER_TEST_ONLY")
-TEST_CHAT_ID = int(os.getenv("TEST_CHAT_ID", "0") or "0")
-TEST_USER_ID = int(os.getenv("TEST_USER_ID", "0") or "0")
+# --- чтение ENV ---
+TEST_MODE    = _flag("NEWCOMER_TEST_ONLY")
+TEST_CHAT_ID = int(os.getenv("TEST_CHAT_ID","0") or "0")
+TEST_USER_ID = int(os.getenv("TEST_USER_ID","0") or "0")
+_NEWCOMER_WIN = _get_int_env("NEWCOMER_WINDOW_SECONDS", 24*60*60)
 
-def _parse_ids(val: Optional[str]) -> Iterable[int]:
-    if not val:
-        return []
-    raw = val.replace(",", " ").split()
+def _parse_ids(val: Optional[str]) -> list[int]:
+    if not val: return []
     out = []
-    for x in raw:
-        try:
-            out.append(int(x))
-        except Exception:
-            continue
+    for tok in val.replace(",", " ").split():
+        try: out.append(int(tok))
+        except: pass
     return out
 
-ADMIN_IDS = list(_parse_ids(os.getenv("ADMIN_IDS", "")))
+ADMIN_IDS = _parse_ids(os.getenv("ADMIN_IDS",""))
 
-# Кого уже уведомили (на процесс): {(chat_id, user_id)}
-_notified: Set[tuple[int, int]] = set()
+# --- окно новичка: берём функцию из app.py, иначе фолбэк ---
+try:
+    from app import newcomer_until as _app_newcomer_until  # type: ignore
+    from app import NEWCOMER_WINDOW_SECONDS as _APP_WIN     # type: ignore
+    if isinstance(_APP_WIN, int):
+        _NEWCOMER_WIN = _APP_WIN
+    def _newcomer_until(uid: int, cid: int) -> Optional[int]:
+        return _app_newcomer_until(uid, cid)
+    _LOG.info("NEWCOMER_TESTONLY: using app.newcomer_until(), win=%s", _NEWCOMER_WIN)
+except Exception as e:
+    _LOG.warning("NEWCOMER_TESTONLY: fallback newcomer_until (no app): %r", e)
+    def _newcomer_until(uid: int, cid: int) -> Optional[int]:
+        return int(time.time()) + _NEWCOMER_WIN
+
+# Кого уже оповестили за этот запуск
+_notified: Set[tuple[int,int]] = set()
 
 async def _notify_admins_once(message: Message, until_ts: int) -> None:
     if not ADMIN_IDS:
-        _log.info("TESTONLY: no ADMIN_IDS in ENV — skip admin notify")
+        _LOG.info("TESTONLY: ADMIN_IDS empty — skip")
         return
     bot = getattr(message, "bot", None)
     if bot is None:
-        _log.warning("TESTONLY: message.bot is None — cannot DM admins")
+        _LOG.warning("TESTONLY: message.bot is None — cannot DM")
         return
 
     chat_id = int(message.chat.id)
-    user_id = int(message.from_user.id) if message.from_user else 0
+    user_id = int(message.from_user.id) if getattr(message, "from_user", None) else 0
     key = (chat_id, user_id)
     if key in _notified:
-        _log.info("TESTONLY: already-notified key=%s — skip", key)
-        return
+        _LOG.info("TESTONLY: already notified key=%s", key); return
 
-    text = (message.text or message.caption or "").strip() or "<без текста>"
+    text = (getattr(message, "text", None) or getattr(message, "caption", None) or "").strip() or "<без текста>"
     preview = text if len(text) <= 300 else (text[:297] + "…")
-    until_hh = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(until_ts))
+    until_hh = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(int(until_ts)))
+
     body = (
-        "⚠️ Новичок в тестовом чате\n"
+        "⚠️ Новичок (тестовый) отправил первое сообщение\n"
         f"• chat_id: {chat_id}\n"
         f"• user_id: {user_id}\n"
         f"• окно до: {until_hh} (ts={until_ts})\n"
-        "• первое сообщение (удалено):\n"
+        "• сообщение (удалено в чате):\n"
         f"———\n{preview}\n———"
     )
 
@@ -99,52 +96,48 @@ async def _notify_admins_once(message: Message, until_ts: int) -> None:
             await bot.send_message(admin_id, body)
             ok += 1
         except Exception as e:
-            _log.warning("TESTONLY: admin DM failed admin_id=%s err=%r", admin_id, e)
+            _LOG.warning("TESTONLY: DM admin_id=%s failed: %r", admin_id, e)
     if ok > 0:
         _notified.add(key)
-        _log.info("TESTONLY: notified %s admin(s) for key=%s", ok, key)
+        _LOG.info("TESTONLY: notified %s admin(s) key=%s", ok, key)
 
 async def _on_message(message: Message) -> None:
+    # Диагностический вход — должен появляться в логах если хендлер реально срабатывает
+    _LOG.info("TESTONLY: probe(entry) chat=%s uid=%s", getattr(getattr(message,"chat",None),"id",None), getattr(getattr(message,"from_user",None),"id",None))
     try:
         if not TEST_MODE:
-            return
+            _LOG.info("TESTONLY: TEST_MODE=0 — skip"); return
         if not getattr(message, "chat", None) or not getattr(message, "from_user", None):
-            return
+            _LOG.info("TESTONLY: no chat/from_user — skip"); return
         if int(message.chat.id) != TEST_CHAT_ID:
-            return
+            _LOG.info("TESTONLY: other chat %s — skip", message.chat.id); return
         uid = int(message.from_user.id)
         if uid != TEST_USER_ID:
-            return
+            _LOG.info("TESTONLY: other user %s — skip", uid); return
 
         until_ts = _newcomer_until(uid, TEST_CHAT_ID)
         if until_ts is None:
-            _log.info("TESTONLY: newcomer_until=None — not approved yet, skip")
-            return
+            _LOG.info("TESTONLY: newcomer_until=None — not approved yet"); return
         now = int(time.time())
         if now >= int(until_ts):
-            _log.info("TESTONLY: window expired now=%s until=%s — skip", now, until_ts)
-            return
+            _LOG.info("TESTONLY: window expired now=%s until=%s — skip", now, until_ts); return
 
         await _notify_admins_once(message, int(until_ts))
     except Exception as e:
-        _log.exception("TESTONLY: handler error: %r", e)
+        _LOG.exception("TESTONLY: handler error: %r", e)
 
+# --- универсальные точки входа: app.py может звать любую из них ---
 def setup_newcomer_testonly(router: Router, log: Optional[logging.Logger] = None) -> None:
     if log is not None:
-        global _log
-        _log = log
+        global _LOG; _LOG = log
     if hasattr(router, "message") and hasattr(router.message, "register"):
         router.message.register(_on_message)
-        _log.info("NEWCOMER_TESTONLY: handler registered via router.message.register")
+        _LOG.info("NEWCOMER_TESTONLY: handler registered via router.message.register")
     else:
-        _log.warning("NEWCOMER_TESTONLY: router.message.register not available; handler NOT registered")
+        _LOG.warning("NEWCOMER_TESTONLY: router.message.register missing — NOT registered")
 
-# совместимый алиас на всякий случай
-def setup_newcomer_testonly_compat(*args, **kwargs):
-    try:
-        router = args[0] if args else kwargs.get("router")
-        log = kwargs.get("log")
-        return setup_newcomer_testonly(router, log)
-    except Exception as e:
-        _log.warning("NEWCOMER_TESTONLY: compat wrapper failed: %r", e)
-"@ | Set-Content -NoNewline -Encoding UTF8 _newcomer_testonly.py
+# совместимые алиасы на все случаи
+def setup_newcomer_testonly_compat(*args, **kwargs): return setup_newcomer_testonly(*(args[:1] or (kwargs.get("router"),)), kwargs.get("log"))
+def init_newcomer_testonly(*args, **kwargs):       return setup_newcomer_testonly(*(args[:1] or (kwargs.get("router"),)), kwargs.get("log"))
+def init_newcomer_test_only(*args, **kwargs):      return setup_newcomer_testonly(*(args[:1] or (kwargs.get("router"),)), kwargs.get("log"))
+def setup(*args, **kwargs):                        return setup_newcomer_testonly(*(args[:1] or (kwargs.get("router"),)), kwargs.get("log"))
