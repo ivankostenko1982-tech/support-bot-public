@@ -1,16 +1,16 @@
 from __future__ import annotations
 """
-Test-only: одноразовое DM-уведомление всем ADMIN_IDS о ПЕРВОМ сообщении
-тестового новичка (TEST_USER_ID) в тестовом чате (TEST_CHAT_ID) пока действует окно новичка.
-Не вмешивается в удаление сообщений (это делает _watchdog_testpurge.py).
+Test-only: одноразовое DM-уведомление ADMIN_IDS о ПЕРВОМ сообщении
+тестового новичка (TEST_USER_ID) в TEST_CHAT_ID пока активно окно новичка.
+Не вмешивается в удаление (этим занимается _watchdog_testpurge.py).
 """
 import os, time, logging
-from typing import Optional, Iterable, Set
+from typing import Optional, Set
 
 _LOG = logging.getLogger("support-join-guard")
 _LOG.info("NEWCOMER_TESTONLY: module imported")
 
-# --- aiogram безопасно ---
+# --- безопасный импорт aiogram ---
 try:
     from aiogram import Router, F  # type: ignore
     from aiogram.types import Message  # type: ignore
@@ -18,7 +18,10 @@ except Exception as e:
     Router = object  # type: ignore
     F = None         # type: ignore
     Message = object # type: ignore
-    _LOG.warning("NEWCOMER_TESTONLY: aiogram import failed: %r (service Python vs venv?)", e)
+    _LOG.warning("NEWCOMER_TESTONLY: aiogram import failed: %r", e)
+
+def _flag(name: str) -> bool:
+    return os.getenv(name, "0").lower() in {"1","true","yes","on"}
 
 def _get_int_env(name: str, default: int) -> int:
     try:
@@ -26,16 +29,7 @@ def _get_int_env(name: str, default: int) -> int:
     except Exception:
         return default
 
-def _flag(name: str) -> bool:
-    return os.getenv(name, "0").lower() in {"1","true","yes","on"}
-
-# --- чтение ENV ---
-TEST_MODE    = _flag("NEWCOMER_TEST_ONLY")
-TEST_CHAT_ID = int(os.getenv("TEST_CHAT_ID","0") or "0")
-TEST_USER_ID = int(os.getenv("TEST_USER_ID","0") or "0")
-_NEWCOMER_WIN = _get_int_env("NEWCOMER_WINDOW_SECONDS", 24*60*60)
-
-def _parse_ids(val: Optional[str]) -> list[int]:
+def _parse_ids(val: str | None) -> list[int]:
     if not val: return []
     out = []
     for tok in val.replace(",", " ").split():
@@ -43,23 +37,25 @@ def _parse_ids(val: Optional[str]) -> list[int]:
         except: pass
     return out
 
+TEST_CHAT_ID = int(os.getenv("TEST_CHAT_ID","0") or "0")
+TEST_USER_ID = int(os.getenv("TEST_USER_ID","0") or "0")
+# Новый fallback: если оба TEST_* заданы — считаем TEST_MODE=True, даже без флага
+TEST_MODE = _flag("NEWCOMER_TEST_ONLY") or (bool(TEST_CHAT_ID) and bool(TEST_USER_ID))
+NEWCOMER_WINDOW_SECONDS = _get_int_env("NEWCOMER_WINDOW_SECONDS", 24*60*60)
 ADMIN_IDS = _parse_ids(os.getenv("ADMIN_IDS",""))
 
-# --- окно новичка: берём функцию из app.py, иначе фолбэк ---
+# --- окно новичка из app.py (если доступно) ---
 try:
     from app import newcomer_until as _app_newcomer_until  # type: ignore
-    from app import NEWCOMER_WINDOW_SECONDS as _APP_WIN     # type: ignore
-    if isinstance(_APP_WIN, int):
-        _NEWCOMER_WIN = _APP_WIN
     def _newcomer_until(uid: int, cid: int) -> Optional[int]:
         return _app_newcomer_until(uid, cid)
-    _LOG.info("NEWCOMER_TESTONLY: using app.newcomer_until(), win=%s", _NEWCOMER_WIN)
+    _LOG.info("NEWCOMER_TESTONLY: using app.newcomer_until()")
 except Exception as e:
-    _LOG.warning("NEWCOMER_TESTONLY: fallback newcomer_until (no app): %r", e)
+    _LOG.warning("NEWCOMER_TESTONLY: fallback newcomer_until: %r", e)
     def _newcomer_until(uid: int, cid: int) -> Optional[int]:
-        return int(time.time()) + _NEWCOMER_WIN
+        return int(time.time()) + NEWCOMER_WINDOW_SECONDS
 
-# Кого уже оповестили за этот запуск
+# Кто уже уведомлён (в рамках одного запуска)
 _notified: Set[tuple[int,int]] = set()
 
 async def _notify_admins_once(message: Message, until_ts: int) -> None:
@@ -102,8 +98,9 @@ async def _notify_admins_once(message: Message, until_ts: int) -> None:
         _LOG.info("TESTONLY: notified %s admin(s) key=%s", ok, key)
 
 async def _on_message(message: Message) -> None:
-    # Диагностический вход — должен появляться в логах если хендлер реально срабатывает
-    _LOG.info("TESTONLY: probe(entry) chat=%s uid=%s", getattr(getattr(message,"chat",None),"id",None), getattr(getattr(message,"from_user",None),"id",None))
+    _LOG.info("TESTONLY: probe(entry) chat=%s uid=%s",
+              getattr(getattr(message,"chat",None),"id",None),
+              getattr(getattr(message,"from_user",None),"id",None))
     try:
         if not TEST_MODE:
             _LOG.info("TESTONLY: TEST_MODE=0 — skip"); return
@@ -126,17 +123,26 @@ async def _on_message(message: Message) -> None:
     except Exception as e:
         _LOG.exception("TESTONLY: handler error: %r", e)
 
-# --- универсальные точки входа: app.py может звать любую из них ---
-def setup_newcomer_testonly(router: Router, log: Optional[logging.Logger] = None) -> None:
+def setup_newcomer_testonly(router: Router, log: logging.Logger | None = None) -> None:
     if log is not None:
         global _LOG; _LOG = log
+    # Регистрация на router
     if hasattr(router, "message") and hasattr(router.message, "register"):
         router.message.register(_on_message)
         _LOG.info("NEWCOMER_TESTONLY: handler registered via router.message.register")
     else:
-        _LOG.warning("NEWCOMER_TESTONLY: router.message.register missing — NOT registered")
+        _LOG.warning("NEWCOMER_TESTONLY: router.message.register missing")
+    # Параллельно пробуем зарегистрироваться на dp (если app.dp существует)
+    try:
+        import app as _app  # type: ignore
+        dp = getattr(_app, "dp", None)
+        if dp and hasattr(dp, "message") and hasattr(dp.message, "register"):
+            dp.message.register(_on_message)
+            _LOG.info("NEWCOMER_TESTONLY: handler also registered via dp.message.register")
+    except Exception as e:
+        _LOG.info("NEWCOMER_TESTONLY: dp register skipped: %r", e)
 
-# совместимые алиасы на все случаи
+# Совместимые алиасы (на случай других вызовов из app.py)
 def setup_newcomer_testonly_compat(*args, **kwargs): return setup_newcomer_testonly(*(args[:1] or (kwargs.get("router"),)), kwargs.get("log"))
 def init_newcomer_testonly(*args, **kwargs):       return setup_newcomer_testonly(*(args[:1] or (kwargs.get("router"),)), kwargs.get("log"))
 def init_newcomer_test_only(*args, **kwargs):      return setup_newcomer_testonly(*(args[:1] or (kwargs.get("router"),)), kwargs.get("log"))
