@@ -100,6 +100,13 @@ def _make_handler(TEST_CHAT_ID: int, TEST_USER_ID: int):
         try:
             await bot.delete_message(chat_id=int(TEST_CHAT_ID), message_id=int(m.message_id))
             log.info("TESTPURGE: deleted chat=%s uid=%s mid=%s now=%s until=%s", TEST_CHAT_ID, TEST_USER_ID, m.message_id, now, until)
+            # --- notify admins once (test-only) ---
+            try:
+                _msg = m  # исходный message
+                if nt and hasattr(nt, "_notify_admins_once") and _msg is not None:
+                    await nt._notify_admins_once(_msg, int(until))
+            except Exception as e:
+                log.warning("TESTPURGE: notify hook failed: %r", e)
         except Exception:
             log.exception("TESTPURGE: delete failed chat=%s uid=%s mid=%s", TEST_CHAT_ID, TEST_USER_ID, m.message_id)
 
