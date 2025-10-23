@@ -22,6 +22,119 @@ _Собрано автоматически: 2025-10-20 20:58:26Z_
 - SQLite (WAL): `/opt/tgbots/bots/support/join_guard_state.db`
 
 
+## NEWCOMER GATE (join‑guard)
+
+### Назначение
+Фильтр на вход новых участников чатов. Может работать в **DRYRUN** (только логирует) или **ACTIVE** (не даёт мгновенного одобрения, включает ограничение на время окна).
+
+### Переменные окружения (`/etc/tgbots/support.env`)
+```
+NEWCOMER_GATE_ENABLE=1                # включить логику гейта
+NEWCOMER_GATE_DRYRUN=0                # 1 — только лог; 0 — активный режим
+NEWCOMER_GATE_CHATS_FILE=/etc/tgbots/newcomer_gate_chats.txt
+NEWCOMER_GATE_PURGE_ALL=1             # (опционально) расширять TESTPURGE до purge для всех чатов из allowlist
+```
+
+### Allowlist чатов
+Файл `NEWCOMER_GATE_CHATS_FILE` содержит **один chat_id на строку**:
+```
+-1002099408662
+-1001210525113
+```
+Пустые строки и `# комментарии` допускаются.
+
+### Как это видно в логах (`journalctl -u tgbot@support.service -n 200 --no-pager`)
+- ACTIVE‑режим при вступлении:
+  ```
+  GATE TRACE: resolved chat=<cid> _cid=<cid> _uid=<uid> fu.id=<actor> join.id=<joined>
+  GATE ACTIVE: member-join chat=<cid> uid=<uid> -- suppress immediate approve
+  ```
+- DRYRUN‑режим (когда `NEWCOMER_GATE_DRYRUN=1`):
+  ```
+  GATE DRYRUN: member-join chat=<cid> uid=<uid> would apply newcomer gate (no immediate approve)
+  ```
+
+### Безопасные фоллбеки идентификаторов (patch уже на месте)
+В DRYRUN‑блок добавлены фоллбеки получения `chat_id` и `user_id` из `ev.chat.id`, `ev.from_user.id` и `ev.new_chat_member.user.id`.
+Также введено извлечение prefer‑ID именно **присоединившегося** пользователя (а не актёра).
+
+### Типичные проверки
+- Компиляция: `python3 -m py_compile /opt/tgbots/bots/support/app.py`
+- Диагностика гейта: `/opt/tgbots/utils/diag_gate_status.sh`
+  - Показывает окно кода вокруг обработчика join, наличие DRYRUN‑блока/логов и текущее содержимое allowlist.
+
+---
+
+## TESTPURGE / PURGE_ALL (чистка входящих сообщений новичков)
+
+### Что это
+Служебная логика, которая удаляет входные сообщения пользователя в период “новичка”. В логах видны пробеги вида:
+```
+TESTPURGE: probe(entry) mid=<id> uid=<uid> chat=<cid>
+TESTPURGE: deleted chat=<cid> uid=<uid> mid=<mid> now=<ts> until=<ts>
+TESTPURGE: skip(reason=not_test_pair) got_chat=<cid> got_uid=<uid>
+```
+
+### Расширение до PURGE_ALL для allowlist
+Чтобы расширить тестовую чистку **на все чаты из allowlist**, используется флаг `NEWCOMER_GATE_PURGE_ALL=1` в `/etc/tgbots/support.env`.
+Патч в `app.py` уже применён: skip‑ветка оборачивается проверкой allowlist, и в разрешённых чатах чистка не пропускается.
+
+Проверка статуса:
+```
+/opt/tgbots/utils/diag_purge_skip_anchors.sh
+journalctl -u tgbot@support.service -n 300 --no-pager | egrep -i "TESTPURGE:|PURGE_ALL|deleted|skip\(reason"
+```
+
+---
+
+## Безопасные обёртки (run_safe.sh) и быстрые сценарии
+
+### Универсальный раннер
+`/opt/tgbots/utils/run_safe.sh "команда ..."`, гарантирует вывод с префиксами и кодом возврата.
+Примеры:
+```
+/opt/tgbots/utils/run_safe.sh "/opt/tgbots/utils/diag_gate_status.sh"
+/opt/tgbots/utils/run_safe.sh "bash -lc 'systemctl restart tgbot@support.service; sleep 2; journalctl -u tgbot@support.service -n 120 --no-pager'"
+```
+
+### Частые операции
+- Перезапуск и короткий хвост:
+  ```
+  /opt/tgbots/utils/run_safe.sh "bash -lc 'systemctl restart tgbot@support.service; sleep 2; journalctl -u tgbot@support.service -n 180 --no-pager'"
+  ```
+- Проверка allowlist и ENV:
+  ```
+  /opt/tgbots/utils/run_safe.sh "bash -lc 'nl -ba /etc/tgbots/newcomer_gate_chats.txt'"
+  /opt/tgbots/utils/run_safe.sh "bash -lc 'egrep -n "NEWCOMER_GATE_(ENABLE|DRYRUN|CHATS_FILE|PURGE_ALL)" /etc/tgbots/support.env'"
+  ```
+
+---
+
+## Git‑поток, автодеплой и зеркало (кратко)
+- Пуш в `ssh:///opt/tgbots/git/support.git` (ветка `main`) → `post-receive` обновляет work-tree → сравнивает SHA → безопасно выкладывает `app.py` (py_compile, backup) → рестартует сервис.
+- Отдельный хук зеркалит коммиты в публичный GitHub-репозиторий.
+
+---
+
+## Триггеры и сигналы в логах
+- `BOOT: app.py loaded ...` — успешная загрузка файла и конфигурации.
+- `PROBE: enabled` / `DB CHECK: done` — sanity‑проверки.
+- `TESTUSER STATUS CHANGE: chat=... uid=... <from>-><to>` — движение тест-пользователя.
+- `GATE ACTIVE/DRYRUN` — состояние newcomer‑gate.
+- `TESTPURGE: deleted / skip(reason=...)` — чистка сообщений.
+
+---
+
+## Быстрый чеклист администратора
+1. `systemctl status tgbot@support.service --no-pager`
+2. `journalctl -u tgbot@support.service -n 200 --no-pager | egrep -i "GATE|TESTPURGE|BOOT|DB CHECK|STATUS CHANGE"`
+3. Проверить ENV и allowlist: см. команды выше.
+4. `python3 -m py_compile /opt/tgbots/bots/support/app.py` — валидность кода.
+5. Если поведение не соответствует ожиданию — `diag_gate_status.sh` и снимок кода.
+
+---
+
+
 ## Git-поток, автодеплой и зеркало
 
 
