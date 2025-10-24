@@ -1,0 +1,89 @@
+import os, logging, re, json, urllib.request
+
+_RE = re.compile(
+    r'TESTPURGE:\s+deleted\s+chat=(-?\d+)\s+uid=(\d+)\s+mid=(\d+)\s+now=\d+\s+until=(\d+)'
+)
+
+_cache = set()
+
+def _flag(name: str) -> bool:
+    v = (os.getenv(name, "0") or "0").strip().lower()
+    return v in {"1","true","yes","on"}
+
+def _admin_ids():
+    raw = (os.getenv("ADMIN_IDS","") or "").strip()
+    out = []
+    for part in raw.replace(",", " ").split():
+        p = part.strip()
+        if p.isdigit():
+            out.append(int(p))
+    return out
+
+def _send_dm(token: str, chat_id: int, text: str, timeout: float = 3.0):
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    data = json.dumps({"chat_id": chat_id, "text": text, "disable_notification": True}).encode("utf-8")
+    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        resp.read()
+
+class _Hook(logging.Handler):
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            msg = record.getMessage()
+            if "TESTPURGE: deleted" not in msg:
+                return
+            m = _RE.search(msg)
+            if not m:
+                return
+            chat_id = int(m.group(1))
+            uid     = int(m.group(2))
+            mid     = int(m.group(3))
+            until   = int(m.group(4))
+            key = f"{chat_id}:{uid}"
+            if key in _cache:
+                return
+            if not _flag("NEWCOMER_NOTIFY_TO_CHAT"):
+                return
+            admins = _admin_ids()
+            if not admins:
+                return
+            token = (os.getenv("BOT_TOKEN") or "").strip()
+            if not token:
+                return
+
+            log = logging.getLogger("support-join-guard")
+            log.info("LOGHOOK: notify start cid=%s uid=%s mid=%s admins=%s until=%s",
+                     chat_id, uid, mid, admins, until)
+
+            txt = ("Newcomer message was deleted\n"
+                   f"chat: {chat_id}\n"
+                   f"user: {uid}\n"
+                   f"msg_id: {mid}\n"
+                   f"window until: {until}")
+
+            sent = 0
+            for aid in admins:
+                try:
+                    _send_dm(token, aid, txt, timeout=3.0)
+                    sent += 1
+                except Exception as e:
+                    log.warning("LOGHOOK: notify fail admin=%s cid=%s uid=%s err=%r", aid, chat_id, uid, e)
+
+            if sent > 0:
+                _cache.add(key)
+                log.info("LOGHOOK: notify sent=%s key=%s", sent, key)
+        except Exception as e:
+            try:
+                logging.getLogger("support-join-guard").warning("LOGHOOK: exception %r", e)
+            except Exception:
+                pass
+
+def install_on_logger(logger_name: str = "support-join-guard") -> None:
+    try:
+        log = logging.getLogger(logger_name)
+        for h in log.handlers:
+            if isinstance(h, _Hook):
+                return
+        log.addHandler(_Hook())
+    except Exception:
+        pass

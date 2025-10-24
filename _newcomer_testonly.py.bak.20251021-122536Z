@@ -1,0 +1,194 @@
+from __future__ import annotations
+"""
+Test-only: одноразовое DM-уведомление ADMIN_IDS о ПЕРВОМ сообщении
+тестового новичка (TEST_USER_ID) в TEST_CHAT_ID пока активно окно новичка.
+Не вмешивается в удаление (_watchdog_testpurge.py этим занимается).
+"""
+import os, time, logging, pathlib, sqlite3
+from typing import Optional, Set
+
+_LOG = logging.getLogger("support-join-guard")
+_LOG.info("NEWCOMER_TESTONLY: module imported")
+
+# --- безопасный импорт aiogram ---
+try:
+    from aiogram import Router, F
+    from aiogram.types import Message
+    from aiogram import Bot
+except Exception:
+    Router = object  # type: ignore
+    F = None         # type: ignore
+    Message = object # type: ignore
+    Bot = object     # type: ignore
+
+# --- конфиг / env ---
+def _env_flag(name: str, default: bool=False) -> bool:
+    v = os.getenv(name, "")
+    if not v:
+        return default
+    return v.lower() in {"1","true","yes","on"}
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except Exception:
+        return default
+
+def _parse_ids(s: str | None) -> Set[int]:
+    out: Set[int] = set()
+    if not s: return out
+    for tok in s.replace(";",",").split(","):
+        tok = tok.strip()
+        if not tok: continue
+        try: out.add(int(tok))
+        except: pass
+    return out
+
+NEWCOMER_TEST_ONLY = _env_flag("NEWCOMER_TEST_ONLY", False)
+NEWCOMER_WINDOW_SECONDS = _env_int("NEWCOMER_WINDOW_SECONDS", 86400)
+TEST_CHAT_ID = _env_int("TEST_CHAT_ID", 0)
+TEST_USER_ID = _env_int("TEST_USER_ID", 0)
+ADMIN_IDS = _parse_ids(os.getenv("ADMIN_IDS", ""))
+
+SQLITE_PATH = os.getenv("SQLITE_PATH", "/opt/tgbots/bots/support/join_guard_state.db")
+STAMP_DIR = pathlib.Path(os.getenv("TESTONLY_STAMP_DIR", "/opt/tgbots/bots/support/stamps"))
+STAMP_DIR.mkdir(parents=True, exist_ok=True)
+
+_LOG.info("NEWCOMER_TESTONLY: cfg test_only=%s window=%s chat=%s user=%s admins=%s",
+          NEWCOMER_TEST_ONLY, NEWCOMER_WINDOW_SECONDS, TEST_CHAT_ID, TEST_USER_ID, sorted(ADMIN_IDS))
+
+def _stamp_path(chat_id: int, user_id: int) -> pathlib.Path:
+    return STAMP_DIR / f"notified_{chat_id}_{user_id}.stamp"
+
+def _was_notified(chat_id: int, user_id: int) -> bool:
+    return _stamp_path(chat_id, user_id).exists()
+
+def _set_notified(chat_id: int, user_id: int) -> None:
+    p = _stamp_path(chat_id, user_id)
+    try:
+        p.write_text(str(int(time.time())), encoding="utf-8")
+    except Exception as e:
+        _LOG.warning("NEWCOMER_TESTONLY: cannot write stamp %s: %r", p, e)
+
+# --- newcomer_until() через app или прямой SELECT ---
+def _fallback_newcomer_until(uid: int, cid: int) -> Optional[int]:
+    try:
+        with sqlite3.connect(SQLITE_PATH, timeout=3.0) as conn:
+            row = conn.execute(
+                "SELECT approved_at FROM approvals WHERE user_id=? AND chat_id=?",
+                (int(uid), int(cid))
+            ).fetchone()
+            if not row or row[0] is None:
+                return None
+            return int(row[0]) + int(NEWCOMER_WINDOW_SECONDS)
+    except Exception as e:
+        _LOG.warning("NEWCOMER_TESTONLY: fallback newcomer_until failed: %r", e)
+        return None
+
+def newcomer_until(uid: int, cid: int) -> Optional[int]:
+    try:
+        import app  # type: ignore
+        if hasattr(app, "newcomer_until"):
+            _LOG.info("NEWCOMER_TESTONLY: using app.newcomer_until()")
+            return app.newcomer_until(uid, cid)  # type: ignore
+    except Exception:
+        pass
+    return _fallback_newcomer_until(uid, cid)
+
+# --- notify ---
+async def _notify_admins_once(bot: "Bot", chat_id: int, user_id: int, msg: "Message") -> None:
+    if _was_notified(chat_id, user_id):
+        _LOG.info("NEWCOMER_TESTONLY: already notified (cached) chat=%s uid=%s", chat_id, user_id)
+        return
+    if not ADMIN_IDS:
+        _LOG.warning("NEWCOMER_TESTONLY: ADMIN_IDS empty — некому слать уведомление")
+        return
+
+    txt = getattr(msg, "text", None) or getattr(msg, "caption", None) or "<no text>"
+    preview = txt if len(txt) <= 300 else (txt[:300] + "…")
+
+    sent = 0
+    for aid in ADMIN_IDS:
+        try:
+            await bot.send_message(
+                aid,
+                f"⚠️ Новичок теста в чате {chat_id} (uid={user_id}) отправил своё первое сообщение в окно новичка.\n"
+                f"Текст:\n{preview}"
+            )
+            sent += 1
+        except Exception as e:
+            _LOG.warning("NEWCOMER_TESTONLY: DM to admin %s failed: %r", aid, e)
+    if sent > 0:
+        _set_notified(chat_id, user_id)
+        _LOG.info("NEWCOMER_TESTONLY: notified admins=%s chat=%s uid=%s", sorted(ADMIN_IDS), chat_id, user_id)
+
+# --- хендлер с явным bot-инжектом и подробными логами ---
+async def _handler(message: "Message", bot: "Bot"):
+    try:
+        if not NEWCOMER_TEST_ONLY:
+            return
+        m = message
+        if not getattr(m, "chat", None) or not getattr(m, "from_user", None):
+            return
+        cid = int(m.chat.id)
+        uid = int(m.from_user.id)
+
+        _LOG.info("TESTONLY: probe(entry) mid=%s uid=%s chat=%s", getattr(m, "message_id", "?"), uid, cid)
+
+        if cid != TEST_CHAT_ID:
+            _LOG.info("TESTONLY: skip(reason=other-chat) got=%s expect=%s", cid, TEST_CHAT_ID); return
+        if uid != TEST_USER_ID:
+            _LOG.info("TESTONLY: skip(reason=other-user) got=%s expect=%s", uid, TEST_USER_ID); return
+
+        until = newcomer_until(uid, cid)
+        now = int(time.time())
+        if until is None:
+            _LOG.info("TESTONLY: skip(reason=not-approved-yet)"); return
+        if now >= int(until):
+            _LOG.info("TESTONLY: skip(reason=window-expired) now=%s until=%s", now, until); return
+
+        await _notify_admins_once(bot, cid, uid, m)
+    except Exception as e:
+        _LOG.warning("NEWCOMER_TESTONLY: handler error: %r", e)
+
+# --- регистрация в router (+ дублируем в dp, если доступен) ---
+def setup_newcomer_testonly(router: "Router", log: logging.Logger | None = None) -> None:
+    lg = log or _LOG
+    if not NEWCOMER_TEST_ONLY:
+        lg.info("NEWCOMER_TESTONLY: disabled (NEWCOMER_TEST_ONLY=0)")
+        return
+    if F is None or not hasattr(router, "message"):
+        lg.warning("NEWCOMER_TESTONLY: aiogram Router not available; skip")
+        return
+    try:
+        # строгие фильтры — меньше шума
+        router.message.register(_handler, F.chat.id == TEST_CHAT_ID, F.from_user.id == TEST_USER_ID)
+        lg.info("NEWCOMER_TESTONLY: handler registered via router.message.register")
+    except Exception as e:
+        lg.warning("NEWCOMER_TESTONLY: router register failed: %r", e)
+    # fallback: если кто-то отдаёт нам dp вместо router
+    try:
+        if hasattr(router, "dispatcher"):
+            dp = getattr(router, "dispatcher")
+            if hasattr(dp, "message"):
+                dp.message.register(_handler, F.chat.id == TEST_CHAT_ID, F.from_user.id == TEST_USER_ID)
+                lg.info("NEWCOMER_TESTONLY: handler also registered via dp.message.register")
+    except Exception as e:
+        lg.info("NEWCOMER_TESTONLY: dp-register fallback not used: %r", e)
+
+# совместимость со старыми вызовами через *args/**kwargs
+def setup_newcomer_testonly_compat(*args, **kwargs):
+    try:
+        r = None
+        for a in list(args) + list(kwargs.values()):
+            if isinstance(a, Router):
+                r = a; break
+        if r is not None:
+            return setup_newcomer_testonly(r, None)
+    except Exception as e:
+        _LOG.warning("NEWCOMER_TESTONLY: compat wrapper failed: %r", e)
+
+# алиасы (некоторые места могли звать «любой» setup_newcomer_testonly)
+setup_newcomer_testonly.__name__ = "setup_newcomer_testonly"
+def setup_newcomer_testonly_alias(*args, **kwargs):
+    return setup_newcomer_testonly_compat(*args, **kwargs)

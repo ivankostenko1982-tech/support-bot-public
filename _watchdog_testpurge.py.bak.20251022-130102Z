@@ -1,0 +1,140 @@
+# -*- coding: utf-8 -*-
+# Minimal, safe test-purge watchdog:
+# - v3: direct registration via dp.message.register
+# - v2: fallback handler
+# - detailed logs: probe(entry), skip(reason=...), deleted, error
+from __future__ import annotations
+try:
+    import _newcomer_testonly as nt
+except Exception:
+    nt = None
+
+import os, time, sqlite3, asyncio, logging
+from typing import Optional
+
+try:
+    # v3 types
+    from aiogram import types
+except Exception:
+    # v2 fallback
+    from aiogram import types  # type: ignore
+
+log = logging.getLogger("support-join-guard")
+
+def _flag(name: str) -> bool:
+    v = (os.getenv(name, "0") or "0").strip().lower()
+    return v in {"1", "true", "yes", "on"}
+
+def _get_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)) or str(default))
+    except Exception:
+        return default
+
+def _newcomer_until(user_id: int, chat_id: int) -> Optional[int]:
+    """Return UNIX ts when newcomer window ends; None if not approved yet or DB error."""
+    db = os.getenv("SQLITE_PATH", "/opt/tgbots/bots/support/join_guard_state.db")
+    win = _get_int("NEWCOMER_WINDOW_SECONDS", 86400)
+    try:
+        with sqlite3.connect(db, timeout=3.0) as conn:
+            row = conn.execute(
+                "SELECT approved_at FROM approvals WHERE user_id=? AND chat_id=?",
+                (int(user_id), int(chat_id)),
+            ).fetchone()
+            if not row or row[0] is None:
+                return None
+            return int(row[0]) + int(win)
+    except Exception:
+        log.exception("TESTPURGE: newcomer_until failed uid=%s chat=%s", user_id, chat_id)
+        return None
+
+async def _can_delete(bot, chat_id: int) -> bool:
+    try:
+        me = await bot.get_chat_member(chat_id, (await bot.me()).id)
+        # aiogram v3: attributes are similar; check both generic admin & flag
+        st = getattr(me, "status", None)
+        can = bool(getattr(me, "can_delete_messages", False))
+        return bool(st in {"administrator", "creator"} and (can or True))
+    except Exception:
+        log.exception("TESTPURGE: cannot inspect delete rights chat=%s", chat_id)
+        return False
+
+def _make_handler(TEST_CHAT_ID: int, TEST_USER_ID: int):
+    async def _purge(m: "types.Message"):
+        # Probe
+        log.info(
+            "TESTPURGE: probe(entry) mid=%s uid=%s chat=%s",
+            getattr(m, "message_id", None),
+            getattr(getattr(m, "from_user", None), "id", None),
+            getattr(getattr(m, "chat", None), "id", None),
+        )
+
+        # Sanity
+        if not (m and m.chat and m.from_user):
+            log.info("TESTPURGE: skip(reason=no_message_or_user_or_chat)")
+            return
+
+        # test-only gate
+        if not _flag("NEWCOMER_TEST_ONLY"):
+            log.info("TESTPURGE: skip(reason=test_only_flag_off)")
+            return
+
+        # pair check
+        if int(m.chat.id) != int(TEST_CHAT_ID) or int(m.from_user.id) != int(TEST_USER_ID):
+            log.info("TESTPURGE: skip(reason=not_test_pair) got_chat=%s got_uid=%s", m.chat.id, m.from_user.id)
+            return
+
+        # newcomer window
+        until = _newcomer_until(int(TEST_USER_ID), int(TEST_CHAT_ID))
+        now = int(time.time())
+        if until is None:
+            log.info("TESTPURGE: skip(reason=not_approved_yet)")
+            return
+        if now >= int(until):
+            log.info("TESTPURGE: skip(reason=outside_newcomer_window) now=%s until=%s", now, until)
+            return
+
+        # rights
+        bot = m.bot
+        if not await _can_delete(bot, int(TEST_CHAT_ID)):
+            log.info("TESTPURGE: skip(reason=no_delete_rights)")
+            return
+
+        # delete
+        try:
+            await bot.delete_message(chat_id=int(TEST_CHAT_ID), message_id=int(m.message_id))
+            log.info("TESTPURGE: deleted chat=%s uid=%s mid=%s now=%s until=%s", TEST_CHAT_ID, TEST_USER_ID, m.message_id, now, until)
+                        # --- notify admins once (test-only) ---
+                        try:
+                            _msg = m  # исходный message
+                            if nt and hasattr(nt, "_notify_admins_once") and _msg is not None:
+                                await nt._notify_admins_once(_msg, int(until))
+                        except Exception as e:
+                            log.warning("TESTPURGE: notify hook failed: %r", e)
+        except Exception:
+            log.exception("TESTPURGE: delete failed chat=%s uid=%s mid=%s", TEST_CHAT_ID, TEST_USER_ID, m.message_id)
+
+    return _purge
+
+async def start(bot, dp, _log, cmd_router, TEST_CHAT_ID: int, TEST_USER_ID: int):
+    """Entry called from app.py (soft import)."""
+    try:
+        # Prefer v3 direct registration
+        try:
+            dp.message.register(_make_handler(int(TEST_CHAT_ID), int(TEST_USER_ID)))
+            log.info("TESTPURGE: handler registered via dp.message.register (v3)")
+        except Exception:
+            # v2 fallback (if dispatcher has decorator)
+            try:
+                from aiogram import Dispatcher  # type: ignore
+                # best-effort attach via decorator API
+                handler = _make_handler(int(TEST_CHAT_ID), int(TEST_USER_ID))
+                # emulate decorator registration
+                dp.register_message_handler(handler)
+                log.info("TESTPURGE: handler registered (v2-fallback)")
+            except Exception:
+                log.exception("TESTPURGE: cannot register handler (no v3 and v2 fallback failed)")
+                return
+        log.info("TESTPURGE: started for chat=%s uid=%s", TEST_CHAT_ID, TEST_USER_ID)
+    except Exception:
+        log.exception("TESTPURGE: start failed")

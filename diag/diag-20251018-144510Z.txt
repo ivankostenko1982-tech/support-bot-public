@@ -1,0 +1,329 @@
+
+===== SYSTEM =====
+UTC now: Sat Oct 18 14:45:10 UTC 2025
+Local:   Sat Oct 18 17:45:10 MSK 2025
+User/Group (service):
+User=tgbot
+Group=tgbot
+
+===== PYTHON / AIROGRAM =====
+aiogram: 3.22.0
+python: 3.10.12 (main, Aug 15 2025, 14:32:43) [GCC 11.4.0]
+
+===== .ENV SNAPSHOT =====
+AIROGRAM_VERSION=3.22.0
+
+===== ROUTERS / HANDLERS =====
+# include_router:
+303:dp.include_router(cmd_router)
+304:dp.include_router(human_guard_router)
+305:dp.include_router(router)
+
+# 'Я человек' / hg1/hg2/v:
+501:    kb.button(text="✅ Я человек (подтвердить)", callback_data="refresh")
+943:    await cb.answer("Сначала подтвердите заявку через кнопку ‘Я человек’ и эмодзи-квиз.", show_alert=True)
+977:@router.callback_query(F.data.startswith("v:"))
+1421:    kb = [[_IKBtn_hg(text="✅ Я человек", callback_data=cbdata)]]
+1425:@human_guard_router.callback_query(_F_hg.data.startswith("hg1:"))
+1479:@human_guard_router.callback_query(_F_hg.data.startswith("hg2:"))
+
+# approve_chat_join_request:
+1013:        # await bot.approve_chat_join_request(chat_id=chat_id, user_id=cb.from_user.id)
+1014:        # await bot.approve_chat_join_request(chat_id=chat_id, user_id=cb.from_user.id)
+1034:        logging.exception("approve_chat_join_request failed")
+1125:                # await bot.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
+1533:            await cb.bot.approve_chat_join_request(cid, uid)
+
+# url= (возможные «Перейти в группу» ссылки):
+NO url= BUTTONS FOUND
+
+===== HUMAN GUARD CODE (1360-1560) =====
+HUMAN_MIN_DELAY = int(os.getenv("HUMAN_MIN_DELAY", "3"))
+HUMAN_TTL_STEP1 = int(os.getenv("HUMAN_TTL_STEP1", "180"))
+HUMAN_TTL_STEP2 = int(os.getenv("HUMAN_TTL_STEP2", "60"))
+
+human_guard_router = _Router_hg(name="human_guard")
+
+def _ensure_guard_tokens_table():
+    with closing(sqlite3.connect(SQLITE_PATH)) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS guard_tokens (
+                token TEXT PRIMARY KEY,
+                payload TEXT NOT NULL,
+                exp INTEGER NOT NULL,
+                used INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        conn.commit()
+
+def _tok_new_id(nbytes: int = 12) -> str:
+    # 12 bytes -> ~16 chars base64url (without '=')
+    return base64.urlsafe_b64encode(secrets.token_bytes(nbytes)).decode().rstrip("=")
+
+def create_token(payload: dict, ttl_sec: int) -> str:
+    exp = int(time.time()) + int(ttl_sec)
+    token_id = _tok_new_id(12)
+    data = _json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+    with closing(sqlite3.connect(SQLITE_PATH)) as conn:
+        conn.execute(
+            "INSERT INTO guard_tokens(token, payload, exp, used) VALUES(?, ?, ?, 0)",
+            (token_id, data, exp),
+        )
+        conn.commit()
+    return token_id
+
+def get_token(token_id: str, expected_type: str | None = None) -> dict | None:
+    with closing(sqlite3.connect(SQLITE_PATH)) as conn:
+        cur = conn.execute("SELECT payload, exp, used FROM guard_tokens WHERE token=?", (token_id,))
+        row = cur.fetchone()
+    if not row:
+        return None
+    payload_s, exp, used = row
+    if used or int(exp) < int(time.time()):
+        return None
+    try:
+        payload = _json.loads(payload_s)
+    except Exception:
+        return None
+    if expected_type and payload.get("type") != expected_type:
+        return None
+    return payload
+
+def mark_token_used(token_id: str) -> None:
+    with closing(sqlite3.connect(SQLITE_PATH)) as conn:
+        conn.execute("UPDATE guard_tokens SET used=1 WHERE token=?", (token_id,))
+        conn.commit()
+
+# Helper to build initial "I'm human" button for a given user/chat
+def build_human_button(user_id: int, chat_id: int) -> tuple[str, list[list[_IKBtn_hg]]]:
+    payload = {"type": "verify1", "uid": int(user_id), "cid": int(chat_id), "iat": int(time.time())}
+    tok = create_token(payload, HUMAN_TTL_STEP1)
+    cbdata = f"hg1:{tok}"
+    kb = [[_IKBtn_hg(text="✅ Я человек", callback_data=cbdata)]]
+    return "Подтвердите, что вы человек:", kb
+
+# Step1 handler: verify1
+@human_guard_router.callback_query(_F_hg.data.startswith("hg1:"))
+async def human_step1(cb: _CallbackQuery_hg):
+    try:
+        token_id = cb.data.split(":", 1)[1]
+    except Exception:
+        return await cb.answer("Некорректный токен", show_alert=True)
+    payload = get_token(token_id, expected_type="verify1")
+    if not payload:
+        return await cb.answer("Кнопка устарела. Запросите новую.", show_alert=True)
+
+    uid = int(payload.get("uid", 0))
+    cid = int(payload.get("cid", 0))
+    iat = int(payload.get("iat", 0))
+    now = int(time.time())
+
+    # Anti-autoclick: minimal delay
+    if now - iat < HUMAN_MIN_DELAY:
+        return await cb.answer(f"Слишком быстро. Подождите ещё {HUMAN_MIN_DELAY - (now - iat)} сек.", show_alert=True)
+
+    # Build emoji quiz (step2)
+    # 3 emojis, ask to press the requested one
+    EMOJI_SET = ["🐱", "🐶", "🦊", "🐻", "🐼", "🦁", "🐯", "🐵", "🐹"]
+    import random as _random
+    options = _random.sample(EMOJI_SET, 3)
+    correct_idx = _random.randrange(0, 3)
+    target = options[correct_idx]
+
+    quiz_payload = {"type": "quiz2", "uid": uid, "cid": cid, "target": target}
+    quiz_tok = create_token(quiz_payload, HUMAN_TTL_STEP2)
+
+    kb = _IKB_hg()
+    for idx, e in enumerate(options):
+        kb.button(text=e, callback_data=f"hg2:{quiz_tok}:{idx}")
+    kb.adjust(3)
+
+    # Mark step1 token used to prevent replay
+    mark_token_used(token_id)
+
+    try:
+        await cb.message.answer(
+            f"Выберите эмодзи: **{target}**",
+            reply_markup=kb.as_markup(),
+            parse_mode="Markdown"
+        )
+    except Exception:
+        # fallback without Markdown
+        await cb.message.answer(
+            f"Выберите эмодзи: {target}",
+            reply_markup=kb.as_markup()
+        )
+    await cb.answer()
+
+
+# Step2 handler: quiz2
+@human_guard_router.callback_query(_F_hg.data.startswith("hg2:"))
+async def human_step2(cb: _CallbackQuery_hg):
+    try:
+        _, token_id, idx_s = cb.data.split(":", 2)
+        chosen_idx = int(idx_s)
+    except Exception:
+        return await cb.answer("Некорректный ответ", show_alert=True)
+
+    payload = get_token(token_id, expected_type="quiz2")
+    if not payload:
+        return await cb.answer("Время ответа истекло. Попробуйте снова.", show_alert=True)
+
+    target = payload.get("target")
+    uid = int(payload.get("uid", 0))
+    cid = int(payload.get("cid", 0))
+
+    # Recover options order? We encoded only correct target; treat any non-target as wrong.
+    # chosen_idx just to differ buttons; correctness is whether pressed button text == target.
+    # But we didn't encode the button text here — so we validate by index equality.
+    # To stay robust, we accept only if chosen_idx == stored 'correct_idx'. Since we didn't store, we infer via message text.
+    # Safer approach: encode correct index as part of token now:
+    # For backwards-compat with a running bot, we check message text.
+    correct_emoji = target
+
+    # Extract pressed emoji from button text is not available in callback data.
+    # We rely on index mapping established at creation: since token is unique per quiz row,
+    # we reconstruct the same keyboard by reading the message's reply_markup (if present).
+    try:
+        markup = cb.message.reply_markup
+        row = []
+        if markup and markup.inline_keyboard:
+            # flatten to list in the same order
+            flat = [btn for r in markup.inline_keyboard for btn in r]
+            pressed = flat[chosen_idx].text if 0 <= chosen_idx < len(flat) else None
+        else:
+            pressed = None
+    except Exception:
+        pressed = None
+
+    if pressed != correct_emoji:
+        mark_token_used(token_id)
+        return await cb.answer("Неправильно. Попробуйте ещё раз с новой кнопкой.", show_alert=True)
+
+    # Success path
+    mark_token_used(token_id)
+    try:
+        # Mark approved in DB
+        # Mark approved in DB
+        record_approval(uid, cid)
+    except Exception as e:
+        log.error("record_approval failed: %s", e)
+
+    # Try to approve join request if applicable
+        try:
+            await cb.bot.approve_chat_join_request(cid, uid)
+        except Exception:
+            # ignore if no pending request
+            pass
+
+
+
+    await cb.answer("Подтверждено ✅", show_alert=False)
+
+    try:
+        await cb.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+# Call tokens table ensure at startup if possible (append to existing init chain)
+try:
+    _ensure_guard_tokens_table()
+except Exception as _e:
+    log.error("guard_tokens table ensure failed: %s", _e)
+
+##<HUMAN_GUARD_INCLUDE_AT_END>
+try:
+    pass
+except Exception as e:
+    try:
+        log.warning("human_guard include deferred: %s", e)
+    except Exception:
+        pass
+
+===== SQLITE SCHEMA + SNAPSHOT =====
+# DB path: /opt/tgbots/bots/support/join_guard_state.db
+CREATE TABLE pending_requests (
+                user_id      INTEGER NOT NULL,
+                chat_id      INTEGER NOT NULL,
+                chat_title   TEXT,
+                requested_at INTEGER NOT NULL,
+                PRIMARY KEY (user_id, chat_id)
+            );
+CREATE TABLE settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+CREATE TABLE approvals (
+                user_id     INTEGER NOT NULL,
+                chat_id     INTEGER NOT NULL,
+                approved_at INTEGER NOT NULL, newcomer_until INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (user_id, chat_id)
+            );
+CREATE TABLE guard_tokens (
+                token TEXT PRIMARY KEY,
+                payload TEXT NOT NULL,
+                exp INTEGER NOT NULL,
+                used INTEGER NOT NULL DEFAULT 0
+            );
+
+# pending_requests (top 20):
+
+# approvals (top 20):
+1264572013|-1001276110445|1760780839|0
+314212132|-1001355629107|1760779794|0
+798305528|-1001276110445|1760779046|0
+703888795|-1001472589350|1760773667|0
+412043665|-1001413291597|1760740741|0
+1417211536|-1001355629107|1760739222|0
+1801668614|-1001355629107|1760737007|0
+1375292923|-1001209607608|1760733822|0
+998949771|-1001274723644|1760731574|0
+1166690655|-1001355629107|1760730107|0
+8286693390|-1001209607608|1760729968|0
+6315811713|-1001355629107|1760729897|0
+7556928299|-1001472589350|1760718759|0
+7944218984|-1001210525113|1760718466|0
+8184227618|-1001210525113|1760718236|0
+354004884|-1001274723644|1760715304|0
+8177828389|-1001210525113|1760712230|0
+
+# guard_tokens (top 20):
+
+===== LAST LOGS (filtered) =====
+Oct 18 17:01:57 ivan8.fvds.ru python[676037]: Traceback (most recent call last):
+Oct 18 17:01:57 ivan8.fvds.ru python[676037]: NameError: name 'cmd_router' is not defined
+Oct 18 17:02:14 ivan8.fvds.ru python[676220]: 2025-10-18 17:02:14,178 | INFO | support-join-guard | ENV: SQLITE_PATH=/opt/tgbots/bots/support/join_guard_state.db DELETE_SYSTEM_MESSAGES=True LOCKDOWN_NONADMIN_BOTS=True AGGRESSIVE_CHANNEL_ANTILINK=True ALLOWLIST=[-1002099408662, -1001878435829, -1001472589350, -1001437148632, -1001413291597, -1001404423510, -1001355629107, -1001329487433, -1001276110445, -1001274723644, -1001210525113, -1001209607608] TEST_CHAT_ID=-1002099408662 TRACE_TEST_CHAT=True
+Oct 18 17:02:28 ivan8.fvds.ru python[676280]: 2025-10-18 17:02:28,065 | INFO | support-join-guard | ENV: SQLITE_PATH=/opt/tgbots/bots/support/join_guard_state.db DELETE_SYSTEM_MESSAGES=True LOCKDOWN_NONADMIN_BOTS=True AGGRESSIVE_CHANNEL_ANTILINK=True ALLOWLIST=[-1002099408662, -1001878435829, -1001472589350, -1001437148632, -1001413291597, -1001404423510, -1001355629107, -1001329487433, -1001276110445, -1001274723644, -1001210525113, -1001209607608] TEST_CHAT_ID=-1002099408662 TRACE_TEST_CHAT=True
+Oct 18 17:10:30 ivan8.fvds.ru python[681251]: 2025-10-18 17:10:30,385 | INFO | support-join-guard | ENV: SQLITE_PATH=/opt/tgbots/bots/support/join_guard_state.db DELETE_SYSTEM_MESSAGES=True LOCKDOWN_NONADMIN_BOTS=True AGGRESSIVE_CHANNEL_ANTILINK=True ALLOWLIST=[-1002099408662, -1001878435829, -1001472589350, -1001437148632, -1001413291597, -1001404423510, -1001355629107, -1001329487433, -1001276110445, -1001274723644, -1001210525113, -1001209607608] TEST_CHAT_ID=-1002099408662 TRACE_TEST_CHAT=True
+Oct 18 17:10:49 ivan8.fvds.ru python[681251]: 2025-10-18 17:10:49,453 | ERROR | aiogram.event | Cause exception while process update id=628014991 by bot id=8453324297
+Oct 18 17:10:49 ivan8.fvds.ru python[681251]: TypeError: on_refresh_dummy_guard() takes 0 positional arguments but 1 was given
+Oct 18 17:10:49 ivan8.fvds.ru python[681251]: Traceback (most recent call last):
+Oct 18 17:10:49 ivan8.fvds.ru python[681251]:   File "/opt/tgbots/.venv/lib/python3.10/site-packages/aiogram/dispatcher/middlewares/error.py", line 25, in __call__
+Oct 18 17:10:49 ivan8.fvds.ru python[681251]: TypeError: on_refresh_dummy_guard() takes 0 positional arguments but 1 was given
+Oct 18 17:11:04 ivan8.fvds.ru python[681251]: 2025-10-18 17:11:04,474 | ERROR | aiogram.event | Cause exception while process update id=628014992 by bot id=8453324297
+Oct 18 17:11:04 ivan8.fvds.ru python[681251]: TypeError: on_refresh_dummy_guard() takes 0 positional arguments but 1 was given
+Oct 18 17:11:04 ivan8.fvds.ru python[681251]: Traceback (most recent call last):
+Oct 18 17:11:04 ivan8.fvds.ru python[681251]:   File "/opt/tgbots/.venv/lib/python3.10/site-packages/aiogram/dispatcher/middlewares/error.py", line 25, in __call__
+Oct 18 17:11:04 ivan8.fvds.ru python[681251]: TypeError: on_refresh_dummy_guard() takes 0 positional arguments but 1 was given
+Oct 18 17:11:38 ivan8.fvds.ru python[681251]: 2025-10-18 17:11:38,394 | ERROR | aiogram.event | Cause exception while process update id=628014993 by bot id=8453324297
+Oct 18 17:11:38 ivan8.fvds.ru python[681251]: TypeError: on_refresh_dummy_guard() takes 0 positional arguments but 1 was given
+Oct 18 17:11:38 ivan8.fvds.ru python[681251]: Traceback (most recent call last):
+Oct 18 17:11:38 ivan8.fvds.ru python[681251]:   File "/opt/tgbots/.venv/lib/python3.10/site-packages/aiogram/dispatcher/middlewares/error.py", line 25, in __call__
+Oct 18 17:11:38 ivan8.fvds.ru python[681251]: TypeError: on_refresh_dummy_guard() takes 0 positional arguments but 1 was given
+Oct 18 17:15:27 ivan8.fvds.ru python[682536]: 2025-10-18 17:15:27,754 | INFO | support-join-guard | ENV: SQLITE_PATH=/opt/tgbots/bots/support/join_guard_state.db DELETE_SYSTEM_MESSAGES=True LOCKDOWN_NONADMIN_BOTS=True AGGRESSIVE_CHANNEL_ANTILINK=True ALLOWLIST=[-1002099408662, -1001878435829, -1001472589350, -1001437148632, -1001413291597, -1001404423510, -1001355629107, -1001329487433, -1001276110445, -1001274723644, -1001210525113, -1001209607608] TEST_CHAT_ID=-1002099408662 TRACE_TEST_CHAT=True
+Oct 18 17:35:54 ivan8.fvds.ru python[687240]: 2025-10-18 17:35:54,076 | INFO | support-join-guard | ENV: SQLITE_PATH=/opt/tgbots/bots/support/join_guard_state.db DELETE_SYSTEM_MESSAGES=True LOCKDOWN_NONADMIN_BOTS=True AGGRESSIVE_CHANNEL_ANTILINK=True ALLOWLIST=[-1002099408662, -1001878435829, -1001472589350, -1001437148632, -1001413291597, -1001404423510, -1001355629107, -1001329487433, -1001276110445, -1001274723644, -1001210525113, -1001209607608] TEST_CHAT_ID=-1002099408662 TRACE_TEST_CHAT=True
+
+===== FILES & PERMISSIONS =====
+UTILS_DIR: /opt/tgbots/utils
+total 36
+-rw-rw-r-- 1 tgbot tgbot     5 Oct 18 16:30 _probe.txt
+-rw-r--r-- 1 root  root  16343 Oct 18 17:40 diag-20251018-144005Z.txt
+-rw-r--r-- 1 root  root  15616 Oct 18 17:45 diag-20251018-144510Z.txt
+  File: /opt/tgbots/bots/support/app.py
+  Size: 75135     	Blocks: 152        IO Block: 4096   regular file
+Device: fc02h/64514d	Inode: 45827       Links: 1
+Access: (0644/-rw-r--r--)  Uid: (    0/    root)   Gid: (    0/    root)
+Access: 2025-10-18 17:44:46.799015898 +0300
+Modify: 2025-10-18 17:44:46.735013556 +0300
+Change: 2025-10-18 17:44:46.775015020 +0300
+ Birth: 2025-10-18 17:44:46.735013556 +0300

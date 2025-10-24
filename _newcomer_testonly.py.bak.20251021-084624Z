@@ -1,0 +1,174 @@
+from __future__ import annotations
+# _newcomer_testonly.py — purge + notify-once for test newcomer
+# Admins are taken from ENV ADMIN_IDS (comma/space separated user IDs).
+# If ADMIN_IDS empty or all DMs fail -> quiet in-chat fallback (auto-delete after 60s).
+import os, time, sqlite3, logging, asyncio
+from typing import Optional, List
+from aiogram import Router, Bot, types
+
+log = logging.getLogger("support-join-guard")
+
+def _env_flag(name: str, default: str="0") -> bool:
+    return (os.getenv(name, default).lower() in {"1","true","yes","on"})
+
+def _get_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)) or str(default))
+    except Exception:
+        return default
+
+def _parse_admin_ids(raw: str) -> List[int]:
+    ids: List[int] = []
+    for token in (raw or "").replace(",", " ").split():
+        try:
+            ids.append(int(token))
+        except Exception:
+            continue
+    # dedupe, keep order
+    seen=set(); out=[]
+    for i in ids:
+        if i not in seen:
+            seen.add(i); out.append(i)
+    return out
+
+SQLITE_PATH = os.getenv("SQLITE_PATH", "/opt/tgbots/bots/support/join_guard_state.db")
+NEWCOMER_WINDOW_SECONDS = _get_int("NEWCOMER_WINDOW_SECONDS", 24*60*60)
+TEST_USER_ID = _get_int("TEST_USER_ID", 0)
+TEST_CHAT_ID = _get_int("TEST_CHAT_ID", 0)
+NEWCOMER_TEST_ONLY = _env_flag("NEWCOMER_TEST_ONLY", "0")
+ADMIN_IDS: List[int] = _parse_admin_ids(os.getenv("ADMIN_IDS", ""))
+
+def _newcomer_until(user_id: int, chat_id: int) -> Optional[int]:
+    try:
+        with sqlite3.connect(SQLITE_PATH, timeout=3.0) as conn:
+            cur = conn.execute(
+                "SELECT approved_at FROM approvals WHERE user_id=? AND chat_id=?",
+                (int(user_id), int(chat_id)),
+            )
+            row = cur.fetchone()
+            if not row or row[0] is None:
+                return None
+            return int(row[0]) + int(NEWCOMER_WINDOW_SECONDS)
+    except Exception:
+        log.exception("newcomer_until: failed user_id=%s chat_id=%s", user_id, chat_id)
+        return None
+
+def _notify_once_mark(conn: sqlite3.Connection, uid: int, cid: int) -> bool:
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS newcomer_notified(
+            user_id INTEGER NOT NULL,
+            chat_id INTEGER NOT NULL,
+            first_notified_at INTEGER NOT NULL,
+            PRIMARY KEY(user_id, chat_id)
+        ) STRICT;
+    """)
+    now = int(time.time())
+    try:
+        conn.execute(
+            "INSERT INTO newcomer_notified(user_id, chat_id, first_notified_at) VALUES (?, ?, ?)",
+            (int(uid), int(cid), now),
+        )
+        return True
+    except sqlite3.IntegrityError:
+        return False
+
+async def _notify_by_admin_ids_or_chat(bot: Bot, message: types.Message, until_ts: int) -> None:
+    cid = message.chat.id
+    uid = message.from_user.id if message.from_user else 0
+    txt = (message.text or message.caption or "").strip() or "<без текста>"
+
+    # mark once
+    try:
+        with sqlite3.connect(SQLITE_PATH, timeout=3.0) as conn:
+            should = _notify_once_mark(conn, uid, cid)
+            conn.commit()
+        if not should:
+            log.info("TESTONLY: notify skip(reason=already-notified) chat=%s uid=%s", cid, uid)
+            return
+    except Exception:
+        log.exception("notify-once db mark failed chat=%s uid=%s", cid, uid)
+        return
+
+    newcomer_note = f"🆕 Новичок (окно до {until_ts}, now={int(time.time())})"
+    body = (
+        f"{newcomer_note}\n"
+        f"chat_id={cid}\n"
+        f"user_id={uid}\n"
+        f"Удалённое сообщение:\n"
+        f"────────────────\n"
+        f"{txt}\n"
+    )
+
+    dm_targets = list(ADMIN_IDS)
+    dm_ok = 0
+    dm_fail = 0
+    for aid in dm_targets:
+        try:
+            await bot.send_message(aid, body, disable_web_page_preview=True)
+            dm_ok += 1
+        except Exception as e:
+            dm_fail += 1
+            log.info("TESTONLY: DM to admin %s failed: %r", aid, e)
+
+    # fallback if no admin ids or all dms failed
+    fallback = (not dm_targets) or (dm_ok == 0)
+    if fallback:
+        try:
+            msg = await bot.send_message(
+                cid,
+                "⚠️ Удалено первое сообщение от новичка.\n"
+                f"{newcomer_note}\n"
+                f"user_id={uid}\n"
+                "ЛС админам не доставлено (ADMIN_IDS пуст или отклонено).",
+                disable_notification=True,
+                disable_web_page_preview=True,
+            )
+            await asyncio.sleep(60)
+            try:
+                await bot.delete_message(cid, msg.message_id)
+            except Exception as e:
+                log.info("TESTONLY: failed to auto-delete alert: %r", e)
+        except Exception:
+            log.exception("TESTONLY: fallback in-chat alert failed")
+
+    log.info("TESTONLY: notify summary dm_ok=%s dm_fail=%s admin_ids=%s fallback=%s",
+             dm_ok, dm_fail, len(dm_targets), fallback)
+
+async def _handler(message: types.Message, bot: Bot) -> None:
+    if not NEWCOMER_TEST_ONLY:
+        return
+    if not message or not message.chat or not message.from_user:
+        return
+    cid = message.chat.id
+    uid = message.from_user.id
+    if int(cid) != int(TEST_CHAT_ID) or int(uid) != int(TEST_USER_ID):
+        return
+
+    until = _newcomer_until(uid, cid)
+    now = int(time.time())
+    if until is None or now >= int(until):
+        log.info("TESTONLY: skip(reason=not-in-window) chat=%s uid=%s now=%s until=%s", cid, uid, now, until)
+        return
+
+    try:
+        await bot.delete_message(chat_id=cid, message_id=message.message_id)
+        log.info("TESTONLY: deleted msg chat=%s uid=%s mid=%s until=%s now=%s",
+                 cid, uid, message.message_id, until, now)
+    except Exception as e:
+        log.warning("TESTONLY: delete failed chat=%s uid=%s mid=%s err=%r",
+                    cid, uid, getattr(message, "message_id", "?"), e)
+        return
+
+    await _notify_by_admin_ids_or_chat(bot, message, int(until))
+
+def init_newcomer_testonly(router: Router) -> None:
+    try:
+        router.message.register(_handler)
+        log.info("NEWCOMER_TESTONLY: handler registered (ADMIN_IDS)")
+    except Exception as e:
+        log.warning("NEWCOMER_TESTONLY register failed: %r", e)
+
+# --- compat alias for app.py expecting setup_* name ---
+def setup_newcomer_testonly(router):
+    """Compatibility alias: app.py may call setup_*; delegate to init_*."""
+    return init_newcomer_testonly(router)

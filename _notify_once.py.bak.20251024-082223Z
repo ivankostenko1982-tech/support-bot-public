@@ -1,0 +1,52 @@
+# -*- coding: utf-8 -*-
+import os
+import logging
+log = logging.getLogger("support-join-guard")
+_sent = set()
+
+def _parse_admins() -> list[int]:
+    raw = (os.getenv("ADMIN_IDS","") or "").replace(",", " ")
+    out = []
+    for p in raw.split():
+        if p.strip().isdigit():
+            out.append(int(p.strip()))
+    return out
+
+async def _notify_admins_once(bot, m, until):
+    """ASCII-only; one DM per (chat,user) inside newcomer window."""
+    try:
+        flag = (os.getenv("NEWCOMER_NOTIFY_TO_CHAT","0").lower() in {"1","true","yes","on"})
+        if not flag:
+            return
+        cid = int(getattr(getattr(m, "chat", None), "id", 0) or 0)
+        uid = int(getattr(getattr(m, "from_user", None), "id", 0) or 0)
+        mid = int(getattr(m, "message_id", 0) or 0)
+        key = f"{cid}:{uid}"
+        if key in _sent:
+            return
+        admins = _parse_admins()
+        log.info("TESTPURGE: notify start cid=%s uid=%s mid=%s admins=%s until=%s",
+                 cid, uid, mid, admins, until)
+        if not admins:
+            log.info("TESTPURGE: notify no admins configured")
+            return
+        txt = ("Newcomer message was deleted\n"
+               f"chat: {cid}\n"
+               f"user: {uid}\n"
+               f"msg_id: {mid}\n"
+               f"window until: {until}")
+        ok = 0
+        for aid in admins:
+            try:
+                await bot.send_message(chat_id=aid, text=txt, disable_notification=True)
+                ok += 1
+            except Exception as e:
+                try: log.warning("TESTPURGE: notify fail admin=%s cid=%s uid=%s err=%r", aid, cid, uid, e)
+                except Exception: pass
+        if ok > 0:
+            _sent.add(key)
+        else:
+            log.info("TESTPURGE: notify no-sends cid=%s uid=%s", cid, uid)
+    except Exception as e:
+        try: log.warning("TESTPURGE: notify exception err=%r", e)
+        except Exception: pass

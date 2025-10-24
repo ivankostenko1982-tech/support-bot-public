@@ -1,0 +1,144 @@
+from __future__ import annotations
+# _newcomer_testonly.py — test-only newcomer purge + admin notify-on-first
+# Requirements:
+#   ENV: NEWCOMER_TEST_ONLY=1, TEST_USER_ID, TEST_CHAT_ID, SQLITE_PATH, NEWCOMER_WINDOW_SECONDS
+#   aiogram v3; router passed from app.py via init_newcomer_testonly(router)
+# Behavior:
+#   • удаляет сообщения ТОЛЬКО от TEST_USER_ID в TEST_CHAT_ID в течение окна новичка;
+#   • отправляет ОДНО уведомление всем живым администраторам чата (не-ботам) при первом удалении;
+#   • запись о том, что уведомление уже отправлено, хранится в SQLite в таблице newcomer_notified.
+import os, time, sqlite3, logging
+from typing import Optional
+from aiogram import Router, Bot, types
+
+log = logging.getLogger("support-join-guard")
+
+def _env_flag(name: str, default: str="0") -> bool:
+    return (os.getenv(name, default).lower() in {"1","true","yes","on"})
+
+def _get_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)) or str(default))
+    except Exception:
+        return default
+
+SQLITE_PATH = os.getenv("SQLITE_PATH", "/opt/tgbots/bots/support/join_guard_state.db")
+NEWCOMER_WINDOW_SECONDS = _get_int("NEWCOMER_WINDOW_SECONDS", 24*60*60)
+TEST_USER_ID = _get_int("TEST_USER_ID", 0)
+TEST_CHAT_ID = _get_int("TEST_CHAT_ID", 0)
+NEWCOMER_TEST_ONLY = _env_flag("NEWCOMER_TEST_ONLY", "0")
+
+def _newcomer_until(user_id: int, chat_id: int) -> Optional[int]:
+    """Return UNIX ts until user is newcomer, or None."""
+    try:
+        with sqlite3.connect(SQLITE_PATH, timeout=3.0) as conn:
+            cur = conn.execute(
+                "SELECT approved_at FROM approvals WHERE user_id=? AND chat_id=?",
+                (int(user_id), int(chat_id)),
+            )
+            row = cur.fetchone()
+            if not row or row[0] is None:
+                return None
+            return int(row[0]) + int(NEWCOMER_WINDOW_SECONDS)
+    except Exception:
+        log.exception("newcomer_until: failed user_id=%s chat_id=%s", user_id, chat_id)
+        return None
+
+def _notify_once_mark(conn: sqlite3.Connection, uid: int, cid: int) -> bool:
+    """Return True if we should notify now (first time). Creates table lazily."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS newcomer_notified(
+            user_id INTEGER NOT NULL,
+            chat_id INTEGER NOT NULL,
+            first_notified_at INTEGER NOT NULL,
+            PRIMARY KEY(user_id, chat_id)
+        ) STRICT;
+    """)
+    now = int(time.time())
+    try:
+        conn.execute(
+            "INSERT INTO newcomer_notified(user_id, chat_id, first_notified_at) VALUES (?, ?, ?)",
+            (int(uid), int(cid), now),
+        )
+        return True  # inserted -> first time
+    except sqlite3.IntegrityError:
+        return False  # already notified
+
+async def _notify_admins_once(bot: Bot, message: types.Message, until_ts: int) -> None:
+    """Ping all human admins once, attach the deleted text/caption and 'новичок' note."""
+    cid = message.chat.id
+    uid = message.from_user.id if message.from_user else 0
+    try:
+        with sqlite3.connect(SQLITE_PATH, timeout=3.0) as conn:
+            should = _notify_once_mark(conn, uid, cid)
+            conn.commit()
+        if not should:
+            log.info("TESTONLY: notify skip(reason=already-notified) chat=%s uid=%s", cid, uid)
+            return
+    except Exception:
+        log.exception("notify-once db mark failed chat=%s uid=%s", cid, uid)
+        return
+
+    try:
+        admins = await bot.get_chat_administrators(cid)
+        human_admin_ids = [a.user.id for a in admins if not a.user.is_bot]
+        if not human_admin_ids:
+            log.info("TESTONLY: notify skip(reason=no-human-admins) chat=%s uid=%s", cid, uid)
+            return
+        txt = (message.text or message.caption or "").strip()
+        if not txt:
+            txt = "<без текста>"
+        newcomer_note = f"🆕 Новичок (окно до {until_ts}, now={int(time.time())})"
+        body = (
+            f"{newcomer_note}\n"
+            f"chat_id={cid}\n"
+            f"user_id={uid}\n"
+            f"Удалённое сообщение:\n"
+            f"────────────────\n"
+            f"{txt}\n"
+        )
+        for aid in human_admin_ids:
+            try:
+                await bot.send_message(aid, body, disable_web_page_preview=True)
+            except Exception as e:
+                log.warning("notify admin %s failed: %r", aid, e)
+        log.info("TESTONLY: notified admins=%s chat=%s uid=%s", human_admin_ids, cid, uid)
+    except Exception:
+        log.exception("TESTONLY: notify failure chat=%s uid=%s", cid, uid)
+
+async def _handler(message: types.Message, bot: Bot) -> None:
+    # entry probes
+    if not NEWCOMER_TEST_ONLY:
+        return
+    if not message or not message.chat or not message.from_user:
+        return
+    cid = message.chat.id
+    uid = message.from_user.id
+    if int(cid) != int(TEST_CHAT_ID) or int(uid) != int(TEST_USER_ID):
+        return
+
+    until = _newcomer_until(uid, cid)
+    now = int(time.time())
+    if until is None or now >= int(until):
+        log.info("TESTONLY: skip(reason=not-in-window) chat=%s uid=%s now=%s until=%s", cid, uid, now, until)
+        return
+
+    # try delete, then notify-once
+    try:
+        await bot.delete_message(chat_id=cid, message_id=message.message_id)
+        log.info("TESTONLY: deleted msg chat=%s uid=%s mid=%s until=%s now=%s",
+                 cid, uid, message.message_id, until, now)
+    except Exception as e:
+        log.warning("TESTONLY: delete failed chat=%s uid=%s mid=%s err=%r",
+                    cid, uid, getattr(message, "message_id", "?"), e)
+        return
+
+    await _notify_admins_once(bot, message, int(until))
+
+def init_newcomer_testonly(router: Router) -> None:
+    """Attach handler to router (aiogram v3)."""
+    try:
+        router.message.register(_handler)
+        log.info("NEWCOMER_TESTONLY: handler registered")
+    except Exception as e:
+        log.warning("NEWCOMER_TESTONLY register failed: %r", e)

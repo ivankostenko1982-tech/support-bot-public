@@ -1,0 +1,112 @@
+# -*- coding: utf-8 -*-
+"""
+_loghook_notify: безопасный лог-хук для отправки ЛС админу при первом удалении сообщения новичка.
+Ничего не трогает в боевом коде: просто вешаем logging.Handler на логгер "support-join-guard".
+Правила:
+- Слушаем строки вида: "TESTPURGE: deleted chat=<int> uid=<int> mid=<int> now=<int> until=<int>"
+- Флаг NEWCOMER_NOTIFY_TO_CHAT должен быть истинным (1/true/yes/on) в ENV
+- ADMIN_IDS — пробел/запятая-разделённый список числовых id
+- Отправляем строго ASCII-текст (чтобы исключить любые Unicode-сюрпризы)
+"""
+from __future__ import annotations
+import logging, os, re, json, time
+from urllib.request import Request, urlopen
+from urllib.error import URLError, HTTPError
+
+_LOGGER_NAME = "support-join-guard"
+_RE = re.compile(
+    r"TESTPURGE:\s+deleted\s+chat=(?P<chat>-?\d+)\s+uid=(?P<uid>\d+)\s+mid=(?P<mid>\d+)\s+now=(?P<now>\d+)\s+until=(?P<until>\d+)"
+)
+_CACHE: set[str] = set()
+
+def _flag(name: str) -> bool:
+    v = (os.getenv(name, "0") or "0").strip().lower()
+    return v in {"1","true","yes","on"}
+
+def _parse_admin_ids(raw: str) -> list[int]:
+    vals = []
+    for part in (raw or "").replace(",", " ").split():
+        part = part.strip()
+        if part.isdigit():
+            try: vals.append(int(part))
+            except: pass
+    return vals
+
+def _send_dm(token: str, chat_id: int, text: str) -> bool:
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    data = json.dumps({"chat_id": chat_id, "text": text, "disable_notification": True}).encode("utf-8")
+    req = Request(url, data=data, headers={"Content-Type":"application/json"})
+    try:
+        with urlopen(req, timeout=10) as resp:
+            # 200 и ok=true считаем успехом; но не парсим глубоко — не нужно
+            return resp.status == 200
+    except (URLError, HTTPError):
+        return False
+
+class _OnceNotifyHandler(logging.Handler):
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            msg = record.getMessage()
+        except Exception:
+            return
+        m = _RE.search(msg)
+        if not m:
+            return
+        if not _flag("NEWCOMER_NOTIFY_TO_CHAT"):
+            return
+
+        chat = int(m.group("chat"))
+        uid = int(m.group("uid"))
+        mid = int(m.group("mid"))
+        until = int(m.group("until"))
+
+        key = f"{chat}:{uid}"
+        if key in _CACHE:
+            return
+
+        token = (os.getenv("BOT_TOKEN") or "").strip()
+        if not token:
+            logging.getLogger(_LOGGER_NAME).warning("LOGHOOK: no BOT_TOKEN in env; skip notify")
+            return
+        admins = _parse_admin_ids(os.getenv("ADMIN_IDS",""))
+        if not admins:
+            logging.getLogger(_LOGGER_NAME).warning("LOGHOOK: no ADMIN_IDS in env; skip notify")
+            return
+
+        logging.getLogger(_LOGGER_NAME).info(
+            "LOGHOOK: notify start cid=%s uid=%s mid=%s admins=%s until=%s",
+            chat, uid, mid, admins, until
+        )
+
+        txt = (
+            "Newcomer message was deleted\n"
+            f"chat: {chat}\n"
+            f"user: {uid}\n"
+            f"msg_id: {mid}\n"
+            f"window until: {until}"
+        )
+
+        sent = 0
+        for aid in admins:
+            if _send_dm(token, aid, txt):
+                sent += 1
+
+        if sent > 0:
+            _CACHE.add(key)
+            logging.getLogger(_LOGGER_NAME).info("LOGHOOK: notify sent=%s key=%s", sent, key)
+        else:
+            logging.getLogger(_LOGGER_NAME).warning("LOGHOOK: notify no-sends key=%s", key)
+
+def install_on_logger(logger_name: str = _LOGGER_NAME) -> None:
+    log = logging.getLogger(logger_name)
+    # Не дублируем — если уже висит наш хендлер, выходим
+    for h in log.handlers:
+        if isinstance(h, _OnceNotifyHandler):
+            return
+    h = _OnceNotifyHandler()
+    h.setLevel(logging.INFO)
+    log.addHandler(h)
+    logging.getLogger(_LOGGER_NAME).info(
+        "LOGHOOK: installed handler on '%s' notify_flag=%s",
+        logger_name, _flag("NEWCOMER_NOTIFY_TO_CHAT")
+    )

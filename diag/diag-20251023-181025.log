@@ -1,0 +1,359 @@
+[BUNDLE] TS=20251023-181025
+[BUNDLE] SERVICE=tgbot@support.service LIVE_DIR=/opt/tgbots/bots/support APP=/opt/tgbots/bots/support/app.py SQLITE_PATH=/opt/tgbots/bots/support/join_guard_state.db
+[BUNDLE] == diag_step.sh ==
+[DIAG] TS=20251023-181025 UTILS_DIR=/opt/tgbots/utils APP=/opt/tgbots/bots/support/app.py WORK_APP=/opt/tgbots/repos/support/app.py SERVICE=tgbot@support.service
+[DIAG] uname=Linux ivan8.fvds.ru 5.15.0-160-generic #170-Ubuntu SMP Wed Oct 1 10:06:56 UTC 2025 x86_64 x86_64 x86_64 GNU/Linux
+[DIAG] python=Python 3.10.12
+[DIAG] systemd=systemd 249 (249.11-0ubuntu3.16)
+[DIAG] Fetching remote app.py → /opt/tgbots/utils/diag-20251023-181025/remote_app.py
+[DIAG] SHA live=e7762e74a86432ebce58254c718668ead852475d468353ea2b3c12f8803d5a0a
+[DIAG] SHA work=e7762e74a86432ebce58254c718668ead852475d468353ea2b3c12f8803d5a0a
+[DIAG] SHA remote=e7762e74a86432ebce58254c718668ead852475d468353ea2b3c12f8803d5a0a
+[DIAG] py_compile OK: /opt/tgbots/bots/support/app.py
+[DIAG] py_compile OK: /opt/tgbots/repos/support/app.py
+[DIAG] py_compile OK: /opt/tgbots/utils/diag-20251023-181025/remote_app.py
+[DIAG] Markers in /opt/tgbots/bots/support/app.py
+48:    """Test-only gate: treat as 'newcomer' ONLY for (TEST_USER_ID, TEST_CHAT_ID) when NEWCOMER_TEST_ONLY=1."""
+51:    tu = int(os.getenv("TEST_USER_ID","0") or "0")
+52:    tc = int(os.getenv("TEST_CHAT_ID","0") or "0")
+354:TEST_CHAT_ID = int(os.getenv("TEST_CHAT_ID", "0") or "0")
+355:TEST_USER_ID = int(os.getenv("TEST_USER_ID", "0") or "0")
+1248:    return bool(TEST_CHAT_ID and chat_id and int(chat_id) == TEST_CHAT_ID)
+1297:        "ALLOWLIST=%s TEST_CHAT_ID=%s TRACE_TEST_CHAT=%s",
+1299:        sorted(ALLOWLIST) if ALLOWLIST else "ALL", TEST_CHAT_ID or 0, TRACE_TEST_CHAT
+1308:            await _wd.start(bot, dp, log, cmd_router, TEST_CHAT_ID, TEST_USER_ID)
+1324:            await _wd_purge.start(bot, dp, log, cmd_router, TEST_CHAT_ID, TEST_USER_ID)
+1325:            log.info("TESTPURGE: started for chat=%s uid=%s", TEST_CHAT_ID, TEST_USER_ID)
+1357:    await dp.start_polling(
+1458:        if not (TEST_CHAT_ID and TEST_USER_ID):
+1466:        if chat_id == TEST_CHAT_ID and uid == TEST_USER_ID and status in {ChatMemberStatus.LEFT, ChatMemberStatus.KICKED}:
+[DIAG] ENV usage in /opt/tgbots/bots/support/app.py
+50:    test_only = (os.getenv("NEWCOMER_TEST_ONLY","0").lower() in {"1","true","yes","on"})
+51:    tu = int(os.getenv("TEST_USER_ID","0") or "0")
+52:    tc = int(os.getenv("TEST_CHAT_ID","0") or "0")
+118:                        os.environ[k] = v
+128:        os.environ["SQLITE_PATH"] = db_path
+202:        os.environ["NEWCOMER_WINDOW_SECONDS"] = "86400"
+303:APP_VERSION = os.getenv("APP_VERSION", "2.1.0")  # bump when logic changes
+313:    raw = os.getenv(key)
+335:BOT_TOKEN = (os.getenv("BOT_TOKEN") or "").strip()
+336:UTILS_DIR = os.getenv("UTILS_DIR", "/opt/tgbots/utils")
+337:VERIFY_SECRET = (os.getenv("VERIFY_SECRET") or "").strip()
+344:SQLITE_PATH = os.getenv("SQLITE_PATH", "/opt/tgbots/bots/support/join_guard_state.db")
+345:UTILS_DIR = os.getenv("UTILS_DIR", "/opt/tgbots/utils")
+346:ENV_DELETE_SYSTEM_MESSAGES = os.getenv("DELETE_SYSTEM_MESSAGES", "false").lower() in {"1","true","yes","on"}
+348:ADMIN_CONTACT_OVERRIDE = (os.getenv("ADMIN_CONTACT_OVERRIDE") or "").strip().lstrip("@")
+350:ENV_LOCKDOWN_NONADMIN_BOTS = os.getenv("LOCKDOWN_NONADMIN_BOTS", "true").lower() in {"1","true","yes","on"}
+351:AGGRESSIVE_CHANNEL_ANTILINK = os.getenv("AGGRESSIVE_CHANNEL_ANTILINK", "false").lower() in {"1","true","yes","on"}
+354:TEST_CHAT_ID = int(os.getenv("TEST_CHAT_ID", "0") or "0")
+355:TEST_USER_ID = int(os.getenv("TEST_USER_ID", "0") or "0")
+356:TRACE_TEST_CHAT = os.getenv("TRACE_TEST_CHAT", "0").lower() in {"1","true","yes","on"}
+361:    SQLITE_PATH if "SQLITE_PATH" in globals() else os.getenv("SQLITE_PATH"),
+362:    os.getenv("NEWCOMER_WINDOW_SECONDS","86400"),
+365:ALLOWLIST = _parse_id_list(os.getenv("TARGET_CHAT_IDS", "")) | _parse_id_list(os.getenv("TARGET_CHAT_ID", ""))
+371:ADMIN_IDS = _parse_id_list(os.getenv("ADMIN_IDS", ""))
+1235:        wd_usec = os.getenv("WATCHDOG_USEC")
+1433:    if os.getenv("NEWCOMER_PROBE","0") == "1":
+[DIAG] journalctl tail (tgbot@support.service)
+[DIAG] SYNC_STATE: ok
+[DIAG] Done
+[BUNDLE] == diag_gate_plus.sh ==
+[DG] TS=20251023-181026
+[DG] LIVE_DIR=/opt/tgbots/bots/support WORK_DIR=/opt/tgbots/repos/support SERVICE=tgbot@support.service
+[DG] SHA[app.py] live=e7762e74a86432ebce58254c718668ead852475d468353ea2b3c12f8803d5a0a work=e7762e74a86432ebce58254c718668ead852475d468353ea2b3c12f8803d5a0a remote=e7762e74a86432ebce58254c718668ead852475d468353ea2b3c12f8803d5a0a
+[DG] py_compile OK: /opt/tgbots/bots/support/app.py
+[DG] py_compile OK: /opt/tgbots/repos/support/app.py
+[DG] py_compile OK: /opt/tgbots/utils/diag-gate-20251023-181026/remote_app.py
+[DG] SHA[_newcomer_sidecar.py] live=5f05ae011d3b2118159899bd4251777693f19ae376c1320b88145305bc66db9b work=5f05ae011d3b2118159899bd4251777693f19ae376c1320b88145305bc66db9b remote=5f05ae011d3b2118159899bd4251777693f19ae376c1320b88145305bc66db9b
+[DG] py_compile OK: /opt/tgbots/bots/support/_newcomer_sidecar.py
+[DG] py_compile OK: /opt/tgbots/repos/support/_newcomer_sidecar.py
+[DG] py_compile OK: /opt/tgbots/utils/diag-gate-20251023-181026/remote_sidecar.py
+[DG] SHA[_newcomer_testonly.py] live=2b14d476c1d88abdacf7c56f812a08d96ff31452ed74377cf296f002d9cc8b38 work=2b14d476c1d88abdacf7c56f812a08d96ff31452ed74377cf296f002d9cc8b38 remote=2b14d476c1d88abdacf7c56f812a08d96ff31452ed74377cf296f002d9cc8b38
+[DG] py_compile OK: /opt/tgbots/bots/support/_newcomer_testonly.py
+[DG] py_compile OK: /opt/tgbots/repos/support/_newcomer_testonly.py
+[DG] py_compile OK: /opt/tgbots/utils/diag-gate-20251023-181026/remote_testonly.py
+[DG] SHA[_watchdog_testpurge.py] live=ca7caca3be3b150d477e850bd9fa4e70b3bcbca50ee283a5a9e01539c34b07a6 work=ca7caca3be3b150d477e850bd9fa4e70b3bcbca50ee283a5a9e01539c34b07a6 remote=ca7caca3be3b150d477e850bd9fa4e70b3bcbca50ee283a5a9e01539c34b07a6
+[DG] py_compile OK: /opt/tgbots/bots/support/_watchdog_testpurge.py
+[DG] py_compile OK: /opt/tgbots/repos/support/_watchdog_testpurge.py
+[DG] py_compile OK: /opt/tgbots/utils/diag-gate-20251023-181026/remote_testpurge.py
+[DG] ENV snapshot
+[DG] NEWCOMER_GATE_ENABLE=1
+[DG] NEWCOMER_GATE_DRYRUN=0
+[DG] NEWCOMER_GATE_PURGE_ALL=1
+[DG] NEWCOMER_GATE_CHATS=-1002099408662\,-1001209607608\,-1001404423510\,-1001878435829\,-1001437148632\,-1001276110445\,-1001329487433\,-1001472589350\,-1001355629107\,-1001210525113\,-1001274723644\,-1001413291597
+[DG] NEWCOMER_GATE_CHATS_FILE=/etc/tgbots/newcomer_gate_chats.txt
+[DG] TEST_CHAT_ID=-1002099408662
+[DG] TEST_USER_ID=6700029291
+[DG] TRACE_TEST_CHAT=1
+[DG] LOG_LEVEL=DEBUG
+[DG] SQLITE_PATH=/opt/tgbots/bots/support/join_guard_state.db
+[DG] Allowlist file: /etc/tgbots/newcomer_gate_chats.txt
+1: -1002099408662
+2: -1001210525113
+[DG] Marker scan in app.py
+1321:    # BEGIN TESTPURGE: register purge watcher
+1325:            log.info("TESTPURGE: started for chat=%s uid=%s", TEST_CHAT_ID, TEST_USER_ID)
+1357:    await dp.start_polling(
+[DG] journalctl filtered (last 200 lines)
+Oct 23 19:33:40 ivan8.fvds.ru python[68692]: 2025-10-23 19:33:40,442 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=243290 uid=1394396784 chat=-1001413291597
+Oct 23 19:33:40 ivan8.fvds.ru python[68692]: 2025-10-23 19:33:40,442 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001413291597 got_uid=1394396784
+Oct 23 19:33:43 ivan8.fvds.ru python[68692]: 2025-10-23 19:33:43,453 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=243291 uid=634436235 chat=-1001413291597
+Oct 23 19:33:43 ivan8.fvds.ru python[68692]: 2025-10-23 19:33:43,453 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001413291597 got_uid=634436235
+Oct 23 19:33:52 ivan8.fvds.ru python[68692]: 2025-10-23 19:33:52,009 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=243292 uid=1394396784 chat=-1001413291597
+Oct 23 19:33:52 ivan8.fvds.ru python[68692]: 2025-10-23 19:33:52,010 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001413291597 got_uid=1394396784
+Oct 23 19:34:04 ivan8.fvds.ru python[68692]: 2025-10-23 19:34:04,409 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=243293 uid=5254935007 chat=-1001413291597
+Oct 23 19:34:04 ivan8.fvds.ru python[68692]: 2025-10-23 19:34:04,409 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001413291597 got_uid=5254935007
+Oct 23 19:35:30 ivan8.fvds.ru python[68692]: 2025-10-23 19:35:30,128 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=243294 uid=832529992 chat=-1001413291597
+Oct 23 19:35:30 ivan8.fvds.ru python[68692]: 2025-10-23 19:35:30,128 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001413291597 got_uid=832529992
+Oct 23 19:36:11 ivan8.fvds.ru python[68692]: 2025-10-23 19:36:11,952 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354337 uid=471952618 chat=-1001782483762
+Oct 23 19:36:11 ivan8.fvds.ru python[68692]: 2025-10-23 19:36:11,952 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=471952618
+Oct 23 19:36:49 ivan8.fvds.ru python[68692]: 2025-10-23 19:36:49,079 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354338 uid=1423213824 chat=-1001782483762
+Oct 23 19:36:49 ivan8.fvds.ru python[68692]: 2025-10-23 19:36:49,079 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=1423213824
+Oct 23 19:36:55 ivan8.fvds.ru python[68692]: 2025-10-23 19:36:55,112 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354339 uid=1423213824 chat=-1001782483762
+Oct 23 19:36:55 ivan8.fvds.ru python[68692]: 2025-10-23 19:36:55,112 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=1423213824
+Oct 23 19:37:36 ivan8.fvds.ru python[68692]: 2025-10-23 19:37:36,514 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354340 uid=471952618 chat=-1001782483762
+Oct 23 19:37:36 ivan8.fvds.ru python[68692]: 2025-10-23 19:37:36,514 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=471952618
+Oct 23 19:38:55 ivan8.fvds.ru python[68692]: 2025-10-23 19:38:55,170 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354341 uid=471952618 chat=-1001782483762
+Oct 23 19:38:55 ivan8.fvds.ru python[68692]: 2025-10-23 19:38:55,170 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=471952618
+Oct 23 19:40:43 ivan8.fvds.ru python[68692]: 2025-10-23 19:40:43,843 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354342 uid=471952618 chat=-1001782483762
+Oct 23 19:40:43 ivan8.fvds.ru python[68692]: 2025-10-23 19:40:43,843 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=471952618
+Oct 23 19:41:17 ivan8.fvds.ru python[68692]: 2025-10-23 19:41:17,649 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354343 uid=706144482 chat=-1001782483762
+Oct 23 19:41:17 ivan8.fvds.ru python[68692]: 2025-10-23 19:41:17,649 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=706144482
+Oct 23 19:42:35 ivan8.fvds.ru python[68692]: 2025-10-23 19:42:35,425 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=243295 uid=1394396784 chat=-1001413291597
+Oct 23 19:42:35 ivan8.fvds.ru python[68692]: 2025-10-23 19:42:35,425 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001413291597 got_uid=1394396784
+Oct 23 19:43:09 ivan8.fvds.ru python[68692]: 2025-10-23 19:43:09,061 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354344 uid=471952618 chat=-1001782483762
+Oct 23 19:43:09 ivan8.fvds.ru python[68692]: 2025-10-23 19:43:09,062 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=471952618
+Oct 23 19:45:15 ivan8.fvds.ru python[68692]: 2025-10-23 19:45:15,020 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354345 uid=1423213824 chat=-1001782483762
+Oct 23 19:45:15 ivan8.fvds.ru python[68692]: 2025-10-23 19:45:15,020 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=1423213824
+Oct 23 19:45:39 ivan8.fvds.ru python[68692]: 2025-10-23 19:45:39,807 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354346 uid=1423213824 chat=-1001782483762
+Oct 23 19:45:39 ivan8.fvds.ru python[68692]: 2025-10-23 19:45:39,807 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=1423213824
+Oct 23 19:45:55 ivan8.fvds.ru python[68692]: 2025-10-23 19:45:55,856 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354347 uid=471952618 chat=-1001782483762
+Oct 23 19:45:55 ivan8.fvds.ru python[68692]: 2025-10-23 19:45:55,856 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=471952618
+Oct 23 19:46:19 ivan8.fvds.ru python[68692]: 2025-10-23 19:46:19,234 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354348 uid=471952618 chat=-1001782483762
+Oct 23 19:46:19 ivan8.fvds.ru python[68692]: 2025-10-23 19:46:19,234 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=471952618
+Oct 23 19:46:23 ivan8.fvds.ru python[68692]: 2025-10-23 19:46:23,654 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=243296 uid=757128128 chat=-1001413291597
+Oct 23 19:46:23 ivan8.fvds.ru python[68692]: 2025-10-23 19:46:23,654 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001413291597 got_uid=757128128
+Oct 23 19:47:21 ivan8.fvds.ru python[68692]: 2025-10-23 19:47:21,356 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=243297 uid=670663916 chat=-1001413291597
+Oct 23 19:47:21 ivan8.fvds.ru python[68692]: 2025-10-23 19:47:21,356 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001413291597 got_uid=670663916
+Oct 23 19:52:25 ivan8.fvds.ru python[68692]: 2025-10-23 19:52:25,337 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=243298 uid=1394396784 chat=-1001413291597
+Oct 23 19:52:25 ivan8.fvds.ru python[68692]: 2025-10-23 19:52:25,337 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001413291597 got_uid=1394396784
+Oct 23 19:54:23 ivan8.fvds.ru python[68692]: 2025-10-23 19:54:23,847 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=243299 uid=1394396784 chat=-1001413291597
+Oct 23 19:54:23 ivan8.fvds.ru python[68692]: 2025-10-23 19:54:23,848 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001413291597 got_uid=1394396784
+Oct 23 19:54:38 ivan8.fvds.ru python[68692]: 2025-10-23 19:54:38,740 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354349 uid=1423213824 chat=-1001782483762
+Oct 23 19:54:38 ivan8.fvds.ru python[68692]: 2025-10-23 19:54:38,740 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=1423213824
+Oct 23 19:55:09 ivan8.fvds.ru python[68692]: 2025-10-23 19:55:09,635 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=243300 uid=182895363 chat=-1001413291597
+Oct 23 19:55:09 ivan8.fvds.ru python[68692]: 2025-10-23 19:55:09,635 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001413291597 got_uid=182895363
+Oct 23 19:55:43 ivan8.fvds.ru python[68692]: 2025-10-23 19:55:43,581 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354350 uid=471952618 chat=-1001782483762
+Oct 23 19:55:43 ivan8.fvds.ru python[68692]: 2025-10-23 19:55:43,581 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=471952618
+Oct 23 19:56:15 ivan8.fvds.ru python[68692]: 2025-10-23 19:56:15,134 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=243301 uid=1394396784 chat=-1001413291597
+Oct 23 19:56:15 ivan8.fvds.ru python[68692]: 2025-10-23 19:56:15,135 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001413291597 got_uid=1394396784
+Oct 23 19:56:23 ivan8.fvds.ru python[68692]: 2025-10-23 19:56:23,056 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354351 uid=1423213824 chat=-1001782483762
+Oct 23 19:56:23 ivan8.fvds.ru python[68692]: 2025-10-23 19:56:23,056 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=1423213824
+Oct 23 19:58:08 ivan8.fvds.ru python[68692]: 2025-10-23 19:58:08,747 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=243302 uid=670663916 chat=-1001413291597
+Oct 23 19:58:08 ivan8.fvds.ru python[68692]: 2025-10-23 19:58:08,748 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001413291597 got_uid=670663916
+Oct 23 20:02:16 ivan8.fvds.ru python[68692]: 2025-10-23 20:02:16,898 | INFO | support-join-guard | GATE TRACE: resolved chat=-1001413291597 _cid=-1001413291597 _uid=8190167571 fu.id=8453324297 join.id=8190167571
+Oct 23 20:03:09 ivan8.fvds.ru python[68692]: 2025-10-23 20:03:09,972 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354352 uid=1423213824 chat=-1001782483762
+Oct 23 20:03:09 ivan8.fvds.ru python[68692]: 2025-10-23 20:03:09,972 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=1423213824
+Oct 23 20:05:05 ivan8.fvds.ru python[68692]: 2025-10-23 20:05:05,207 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=243303 uid=5982055891 chat=-1001413291597
+Oct 23 20:05:05 ivan8.fvds.ru python[68692]: 2025-10-23 20:05:05,207 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001413291597 got_uid=5982055891
+Oct 23 20:07:57 ivan8.fvds.ru python[68692]: 2025-10-23 20:07:57,580 | INFO | support-join-guard | GATE TRACE: resolved chat=-1001210525113 _cid=-1001210525113 _uid=7083548005 fu.id=8453324297 join.id=7083548005
+Oct 23 20:07:57 ivan8.fvds.ru python[68692]: 2025-10-23 20:07:57,580 | INFO | support-join-guard | GATE ACTIVE: member-join chat=-1001210525113 uid=7083548005 -- suppress immediate approve
+Oct 23 20:10:17 ivan8.fvds.ru python[68692]: 2025-10-23 20:10:17,167 | INFO | support-join-guard | GATE TRACE: resolved chat=-1001210525113 _cid=-1001210525113 _uid=8158454423 fu.id=8453324297 join.id=8158454423
+Oct 23 20:10:17 ivan8.fvds.ru python[68692]: 2025-10-23 20:10:17,167 | INFO | support-join-guard | GATE ACTIVE: member-join chat=-1001210525113 uid=8158454423 -- suppress immediate approve
+Oct 23 20:15:18 ivan8.fvds.ru python[68692]: 2025-10-23 20:15:18,782 | INFO | support-join-guard | GATE TRACE: resolved chat=-1001404423510 _cid=-1001404423510 _uid=7274178894 fu.id=8453324297 join.id=7274178894
+Oct 23 20:19:57 ivan8.fvds.ru python[68692]: 2025-10-23 20:19:57,436 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354353 uid=1423213824 chat=-1001782483762
+Oct 23 20:19:57 ivan8.fvds.ru python[68692]: 2025-10-23 20:19:57,436 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=1423213824
+Oct 23 20:26:19 ivan8.fvds.ru python[68692]: 2025-10-23 20:26:19,239 | INFO | support-join-guard | GATE TRACE: resolved chat=-1001413291597 _cid=-1001413291597 _uid=6640139875 fu.id=8453324297 join.id=6640139875
+Oct 23 20:51:20 ivan8.fvds.ru python[68692]: 2025-10-23 20:51:20,653 | INFO | support-join-guard | GATE TRACE: resolved chat=-1001355629107 _cid=-1001355629107 _uid=6507556567 fu.id=8453324297 join.id=6507556567
+Oct 23 20:54:04 ivan8.fvds.ru python[68692]: 2025-10-23 20:54:04,789 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354354 uid=471952618 chat=-1001782483762
+Oct 23 20:54:04 ivan8.fvds.ru python[68692]: 2025-10-23 20:54:04,789 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=471952618
+Oct 23 20:54:35 ivan8.fvds.ru python[68692]: 2025-10-23 20:54:35,276 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354355 uid=1423213824 chat=-1001782483762
+Oct 23 20:54:35 ivan8.fvds.ru python[68692]: 2025-10-23 20:54:35,276 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=1423213824
+Oct 23 20:58:57 ivan8.fvds.ru python[68692]: 2025-10-23 20:58:57,420 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354356 uid=471952618 chat=-1001782483762
+Oct 23 20:58:57 ivan8.fvds.ru python[68692]: 2025-10-23 20:58:57,420 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=471952618
+Oct 23 21:00:32 ivan8.fvds.ru python[68692]: 2025-10-23 21:00:32,110 | INFO | support-join-guard | GATE TRACE: resolved chat=-1001413291597 _cid=-1001413291597 _uid=831816766 fu.id=8453324297 join.id=831816766
+Oct 23 21:02:11 ivan8.fvds.ru python[68692]: 2025-10-23 21:02:11,965 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=397814 uid=2127646307 chat=-1001355629107
+Oct 23 21:02:11 ivan8.fvds.ru python[68692]: 2025-10-23 21:02:11,965 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001355629107 got_uid=2127646307
+Oct 23 21:03:19 ivan8.fvds.ru python[68692]: 2025-10-23 21:03:19,344 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=243304 uid=831816766 chat=-1001413291597
+Oct 23 21:03:19 ivan8.fvds.ru python[68692]: 2025-10-23 21:03:19,345 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001413291597 got_uid=831816766
+Oct 23 21:06:41 ivan8.fvds.ru python[68692]: 2025-10-23 21:06:41,731 | INFO | support-join-guard | GATE TRACE: resolved chat=-1001472589350 _cid=-1001472589350 _uid=6588085138 fu.id=8453324297 join.id=6588085138
+Oct 23 21:07:14 ivan8.fvds.ru python[68692]: 2025-10-23 21:07:14,754 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354357 uid=471952618 chat=-1001782483762
+Oct 23 21:07:14 ivan8.fvds.ru python[68692]: 2025-10-23 21:07:14,754 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=471952618
+Oct 23 21:07:28 ivan8.fvds.ru python[152118]: 2025-10-23 21:07:28,858 | INFO | support-join-guard | TESTPURGE: handler registered via dp.message.register (v3)
+Oct 23 21:07:28 ivan8.fvds.ru python[152118]: 2025-10-23 21:07:28,858 | INFO | support-join-guard | TESTPURGE: started for chat=-1002099408662 uid=6700029291
+Oct 23 21:07:28 ivan8.fvds.ru python[152118]: 2025-10-23 21:07:28,858 | INFO | support-join-guard | TESTPURGE: started for chat=-1002099408662 uid=6700029291
+[DG] SYNC_FLAG=ok
+[DG] Done
+[BUNDLE] == systemctl status ==
+active
+[BUNDLE] == journalctl (last 200) filtered ==
+Oct 23 19:33:40 ivan8.fvds.ru python[68692]: 2025-10-23 19:33:40,442 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=243290 uid=1394396784 chat=-1001413291597
+Oct 23 19:33:40 ivan8.fvds.ru python[68692]: 2025-10-23 19:33:40,442 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001413291597 got_uid=1394396784
+Oct 23 19:33:43 ivan8.fvds.ru python[68692]: 2025-10-23 19:33:43,453 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=243291 uid=634436235 chat=-1001413291597
+Oct 23 19:33:43 ivan8.fvds.ru python[68692]: 2025-10-23 19:33:43,453 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001413291597 got_uid=634436235
+Oct 23 19:33:52 ivan8.fvds.ru python[68692]: 2025-10-23 19:33:52,009 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=243292 uid=1394396784 chat=-1001413291597
+Oct 23 19:33:52 ivan8.fvds.ru python[68692]: 2025-10-23 19:33:52,010 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001413291597 got_uid=1394396784
+Oct 23 19:34:04 ivan8.fvds.ru python[68692]: 2025-10-23 19:34:04,409 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=243293 uid=5254935007 chat=-1001413291597
+Oct 23 19:34:04 ivan8.fvds.ru python[68692]: 2025-10-23 19:34:04,409 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001413291597 got_uid=5254935007
+Oct 23 19:35:30 ivan8.fvds.ru python[68692]: 2025-10-23 19:35:30,128 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=243294 uid=832529992 chat=-1001413291597
+Oct 23 19:35:30 ivan8.fvds.ru python[68692]: 2025-10-23 19:35:30,128 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001413291597 got_uid=832529992
+Oct 23 19:36:11 ivan8.fvds.ru python[68692]: 2025-10-23 19:36:11,952 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354337 uid=471952618 chat=-1001782483762
+Oct 23 19:36:11 ivan8.fvds.ru python[68692]: 2025-10-23 19:36:11,952 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=471952618
+Oct 23 19:36:49 ivan8.fvds.ru python[68692]: 2025-10-23 19:36:49,079 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354338 uid=1423213824 chat=-1001782483762
+Oct 23 19:36:49 ivan8.fvds.ru python[68692]: 2025-10-23 19:36:49,079 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=1423213824
+Oct 23 19:36:55 ivan8.fvds.ru python[68692]: 2025-10-23 19:36:55,112 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354339 uid=1423213824 chat=-1001782483762
+Oct 23 19:36:55 ivan8.fvds.ru python[68692]: 2025-10-23 19:36:55,112 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=1423213824
+Oct 23 19:37:36 ivan8.fvds.ru python[68692]: 2025-10-23 19:37:36,514 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354340 uid=471952618 chat=-1001782483762
+Oct 23 19:37:36 ivan8.fvds.ru python[68692]: 2025-10-23 19:37:36,514 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=471952618
+Oct 23 19:38:55 ivan8.fvds.ru python[68692]: 2025-10-23 19:38:55,170 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354341 uid=471952618 chat=-1001782483762
+Oct 23 19:38:55 ivan8.fvds.ru python[68692]: 2025-10-23 19:38:55,170 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=471952618
+Oct 23 19:40:43 ivan8.fvds.ru python[68692]: 2025-10-23 19:40:43,843 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354342 uid=471952618 chat=-1001782483762
+Oct 23 19:40:43 ivan8.fvds.ru python[68692]: 2025-10-23 19:40:43,843 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=471952618
+Oct 23 19:41:17 ivan8.fvds.ru python[68692]: 2025-10-23 19:41:17,649 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354343 uid=706144482 chat=-1001782483762
+Oct 23 19:41:17 ivan8.fvds.ru python[68692]: 2025-10-23 19:41:17,649 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=706144482
+Oct 23 19:42:35 ivan8.fvds.ru python[68692]: 2025-10-23 19:42:35,425 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=243295 uid=1394396784 chat=-1001413291597
+Oct 23 19:42:35 ivan8.fvds.ru python[68692]: 2025-10-23 19:42:35,425 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001413291597 got_uid=1394396784
+Oct 23 19:43:09 ivan8.fvds.ru python[68692]: 2025-10-23 19:43:09,061 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354344 uid=471952618 chat=-1001782483762
+Oct 23 19:43:09 ivan8.fvds.ru python[68692]: 2025-10-23 19:43:09,062 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=471952618
+Oct 23 19:45:15 ivan8.fvds.ru python[68692]: 2025-10-23 19:45:15,020 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354345 uid=1423213824 chat=-1001782483762
+Oct 23 19:45:15 ivan8.fvds.ru python[68692]: 2025-10-23 19:45:15,020 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=1423213824
+Oct 23 19:45:39 ivan8.fvds.ru python[68692]: 2025-10-23 19:45:39,807 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354346 uid=1423213824 chat=-1001782483762
+Oct 23 19:45:39 ivan8.fvds.ru python[68692]: 2025-10-23 19:45:39,807 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=1423213824
+Oct 23 19:45:55 ivan8.fvds.ru python[68692]: 2025-10-23 19:45:55,856 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354347 uid=471952618 chat=-1001782483762
+Oct 23 19:45:55 ivan8.fvds.ru python[68692]: 2025-10-23 19:45:55,856 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=471952618
+Oct 23 19:46:19 ivan8.fvds.ru python[68692]: 2025-10-23 19:46:19,234 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354348 uid=471952618 chat=-1001782483762
+Oct 23 19:46:19 ivan8.fvds.ru python[68692]: 2025-10-23 19:46:19,234 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=471952618
+Oct 23 19:46:23 ivan8.fvds.ru python[68692]: 2025-10-23 19:46:23,654 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=243296 uid=757128128 chat=-1001413291597
+Oct 23 19:46:23 ivan8.fvds.ru python[68692]: 2025-10-23 19:46:23,654 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001413291597 got_uid=757128128
+Oct 23 19:47:21 ivan8.fvds.ru python[68692]: 2025-10-23 19:47:21,356 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=243297 uid=670663916 chat=-1001413291597
+Oct 23 19:47:21 ivan8.fvds.ru python[68692]: 2025-10-23 19:47:21,356 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001413291597 got_uid=670663916
+Oct 23 19:52:25 ivan8.fvds.ru python[68692]: 2025-10-23 19:52:25,337 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=243298 uid=1394396784 chat=-1001413291597
+Oct 23 19:52:25 ivan8.fvds.ru python[68692]: 2025-10-23 19:52:25,337 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001413291597 got_uid=1394396784
+Oct 23 19:54:23 ivan8.fvds.ru python[68692]: 2025-10-23 19:54:23,847 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=243299 uid=1394396784 chat=-1001413291597
+Oct 23 19:54:23 ivan8.fvds.ru python[68692]: 2025-10-23 19:54:23,848 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001413291597 got_uid=1394396784
+Oct 23 19:54:38 ivan8.fvds.ru python[68692]: 2025-10-23 19:54:38,740 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354349 uid=1423213824 chat=-1001782483762
+Oct 23 19:54:38 ivan8.fvds.ru python[68692]: 2025-10-23 19:54:38,740 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=1423213824
+Oct 23 19:55:09 ivan8.fvds.ru python[68692]: 2025-10-23 19:55:09,635 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=243300 uid=182895363 chat=-1001413291597
+Oct 23 19:55:09 ivan8.fvds.ru python[68692]: 2025-10-23 19:55:09,635 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001413291597 got_uid=182895363
+Oct 23 19:55:43 ivan8.fvds.ru python[68692]: 2025-10-23 19:55:43,581 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354350 uid=471952618 chat=-1001782483762
+Oct 23 19:55:43 ivan8.fvds.ru python[68692]: 2025-10-23 19:55:43,581 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=471952618
+Oct 23 19:56:15 ivan8.fvds.ru python[68692]: 2025-10-23 19:56:15,134 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=243301 uid=1394396784 chat=-1001413291597
+Oct 23 19:56:15 ivan8.fvds.ru python[68692]: 2025-10-23 19:56:15,135 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001413291597 got_uid=1394396784
+Oct 23 19:56:23 ivan8.fvds.ru python[68692]: 2025-10-23 19:56:23,056 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354351 uid=1423213824 chat=-1001782483762
+Oct 23 19:56:23 ivan8.fvds.ru python[68692]: 2025-10-23 19:56:23,056 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=1423213824
+Oct 23 19:58:08 ivan8.fvds.ru python[68692]: 2025-10-23 19:58:08,747 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=243302 uid=670663916 chat=-1001413291597
+Oct 23 19:58:08 ivan8.fvds.ru python[68692]: 2025-10-23 19:58:08,748 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001413291597 got_uid=670663916
+Oct 23 20:02:16 ivan8.fvds.ru python[68692]: 2025-10-23 20:02:16,898 | INFO | support-join-guard | GATE TRACE: resolved chat=-1001413291597 _cid=-1001413291597 _uid=8190167571 fu.id=8453324297 join.id=8190167571
+Oct 23 20:03:09 ivan8.fvds.ru python[68692]: 2025-10-23 20:03:09,972 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354352 uid=1423213824 chat=-1001782483762
+Oct 23 20:03:09 ivan8.fvds.ru python[68692]: 2025-10-23 20:03:09,972 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=1423213824
+Oct 23 20:05:05 ivan8.fvds.ru python[68692]: 2025-10-23 20:05:05,207 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=243303 uid=5982055891 chat=-1001413291597
+Oct 23 20:05:05 ivan8.fvds.ru python[68692]: 2025-10-23 20:05:05,207 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001413291597 got_uid=5982055891
+Oct 23 20:07:57 ivan8.fvds.ru python[68692]: 2025-10-23 20:07:57,580 | INFO | support-join-guard | GATE TRACE: resolved chat=-1001210525113 _cid=-1001210525113 _uid=7083548005 fu.id=8453324297 join.id=7083548005
+Oct 23 20:07:57 ivan8.fvds.ru python[68692]: 2025-10-23 20:07:57,580 | INFO | support-join-guard | GATE ACTIVE: member-join chat=-1001210525113 uid=7083548005 -- suppress immediate approve
+Oct 23 20:10:17 ivan8.fvds.ru python[68692]: 2025-10-23 20:10:17,167 | INFO | support-join-guard | GATE TRACE: resolved chat=-1001210525113 _cid=-1001210525113 _uid=8158454423 fu.id=8453324297 join.id=8158454423
+Oct 23 20:10:17 ivan8.fvds.ru python[68692]: 2025-10-23 20:10:17,167 | INFO | support-join-guard | GATE ACTIVE: member-join chat=-1001210525113 uid=8158454423 -- suppress immediate approve
+Oct 23 20:15:18 ivan8.fvds.ru python[68692]: 2025-10-23 20:15:18,782 | INFO | support-join-guard | GATE TRACE: resolved chat=-1001404423510 _cid=-1001404423510 _uid=7274178894 fu.id=8453324297 join.id=7274178894
+Oct 23 20:19:57 ivan8.fvds.ru python[68692]: 2025-10-23 20:19:57,436 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354353 uid=1423213824 chat=-1001782483762
+Oct 23 20:19:57 ivan8.fvds.ru python[68692]: 2025-10-23 20:19:57,436 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=1423213824
+Oct 23 20:26:19 ivan8.fvds.ru python[68692]: 2025-10-23 20:26:19,239 | INFO | support-join-guard | GATE TRACE: resolved chat=-1001413291597 _cid=-1001413291597 _uid=6640139875 fu.id=8453324297 join.id=6640139875
+Oct 23 20:51:20 ivan8.fvds.ru python[68692]: 2025-10-23 20:51:20,653 | INFO | support-join-guard | GATE TRACE: resolved chat=-1001355629107 _cid=-1001355629107 _uid=6507556567 fu.id=8453324297 join.id=6507556567
+Oct 23 20:54:04 ivan8.fvds.ru python[68692]: 2025-10-23 20:54:04,789 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354354 uid=471952618 chat=-1001782483762
+Oct 23 20:54:04 ivan8.fvds.ru python[68692]: 2025-10-23 20:54:04,789 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=471952618
+Oct 23 20:54:35 ivan8.fvds.ru python[68692]: 2025-10-23 20:54:35,276 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354355 uid=1423213824 chat=-1001782483762
+Oct 23 20:54:35 ivan8.fvds.ru python[68692]: 2025-10-23 20:54:35,276 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=1423213824
+Oct 23 20:58:57 ivan8.fvds.ru python[68692]: 2025-10-23 20:58:57,420 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354356 uid=471952618 chat=-1001782483762
+Oct 23 20:58:57 ivan8.fvds.ru python[68692]: 2025-10-23 20:58:57,420 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=471952618
+Oct 23 21:00:32 ivan8.fvds.ru python[68692]: 2025-10-23 21:00:32,110 | INFO | support-join-guard | GATE TRACE: resolved chat=-1001413291597 _cid=-1001413291597 _uid=831816766 fu.id=8453324297 join.id=831816766
+Oct 23 21:02:11 ivan8.fvds.ru python[68692]: 2025-10-23 21:02:11,965 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=397814 uid=2127646307 chat=-1001355629107
+Oct 23 21:02:11 ivan8.fvds.ru python[68692]: 2025-10-23 21:02:11,965 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001355629107 got_uid=2127646307
+Oct 23 21:03:19 ivan8.fvds.ru python[68692]: 2025-10-23 21:03:19,344 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=243304 uid=831816766 chat=-1001413291597
+Oct 23 21:03:19 ivan8.fvds.ru python[68692]: 2025-10-23 21:03:19,345 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001413291597 got_uid=831816766
+Oct 23 21:06:41 ivan8.fvds.ru python[68692]: 2025-10-23 21:06:41,731 | INFO | support-join-guard | GATE TRACE: resolved chat=-1001472589350 _cid=-1001472589350 _uid=6588085138 fu.id=8453324297 join.id=6588085138
+Oct 23 21:07:14 ivan8.fvds.ru python[68692]: 2025-10-23 21:07:14,754 | INFO | support-join-guard | TESTPURGE: probe(entry) mid=354357 uid=471952618 chat=-1001782483762
+Oct 23 21:07:14 ivan8.fvds.ru python[68692]: 2025-10-23 21:07:14,754 | INFO | support-join-guard | TESTPURGE: skip(reason=not_test_pair) got_chat=-1001782483762 got_uid=471952618
+Oct 23 21:07:28 ivan8.fvds.ru python[152118]: 2025-10-23 21:07:28,858 | INFO | support-join-guard | TESTPURGE: handler registered via dp.message.register (v3)
+Oct 23 21:07:28 ivan8.fvds.ru python[152118]: 2025-10-23 21:07:28,858 | INFO | support-join-guard | TESTPURGE: started for chat=-1002099408662 uid=6700029291
+Oct 23 21:07:28 ivan8.fvds.ru python[152118]: 2025-10-23 21:07:28,858 | INFO | support-join-guard | TESTPURGE: started for chat=-1002099408662 uid=6700029291
+[BUNDLE] == ENV snapshot ==
+LOG_LEVEL=DEBUG
+TEST_CHAT_ID=-1002099408662
+TEST_USER_ID=6700029291
+TRACE_TEST_CHAT=1
+DELETE_SYSTEM_MESSAGES=true
+LOCKDOWN_NONADMIN_BOTS=true
+AGGRESSIVE_CHANNEL_ANTILINK=true
+NEWCOMER_*=''
+TARGET_CHAT_ID=''
+TARGET_CHAT_IDS=-1002099408662\,-1001209607608\,-1001404423510\,-1001878435829\,-1001437148632\,-1001276110445\,-1001329487433\,-1001472589350\,-1001355629107\,-1001210525113\,-1001274723644\,-1001413291597
+SQLITE_PATH=/opt/tgbots/bots/support/join_guard_state.db
+UTILS_DIR=/opt/tgbots/utils
+[BUNDLE] == SQLite diag ==
+journal_mode
+wal
+wal_autocheckpoint
+1000
+timeout
+0
+name
+approvals
+guard_tokens
+newcomer_dm_notified
+pending_requests
+settings
+-- table: join_requests
+Error: near line 1: in prepare, no such table: join_requests (1)
+-- table: join_events
+Error: near line 1: in prepare, no such table: join_events (1)
+-- table: newcomers
+Error: near line 1: in prepare, no such table: newcomers (1)
+-- table: gate_state
+Error: near line 1: in prepare, no such table: gate_state (1)
+[BUNDLE] == Routers/Handlers scan ==
+379:cmd_router = Router(name="commands")
+381:router = Router(name="main")
+385:# [SAFE-PATCH MARKER] no-op marker after router init
+388:dp.include_router(cmd_router)
+390:dp.include_router(router)
+706:@router.message(group_msg_filter)
+710:@router.edited_message(group_msg_filter)
+721:# ── Command handlers (PRIORITY router) ─────────────────────────────────────────
+727:@cmd_router.message(Command("health"))
+737:@cmd_router.message(Command("ping"))
+750:@cmd_router.message(Command("version"))
+770:@cmd_router.message(Command("allowlist"))
+779:@cmd_router.message(Command("sysclean"))
+802:@cmd_router.message(Command("botlock"))
+825:@cmd_router.message(Command("diag"))
+844:@cmd_router.message(group_msg_filter)
+856:@cmd_router.message(group_msg_filter)
+881:@router.message(service_filter)
+930:@router.message((F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP})) & F.new_chat_members)
+938:@router.message((F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP})) & F.from_user.as_("u"))
+947:@router.chat_join_request()
+979:@router.message(CommandStart())
+1010:@router.callback_query(F.data == "refresh")
+1042:@router.callback_query(F.data.startswith("v:"))
+1111:@router.message(group_msg_filter)
+1128:@router.edited_message(group_msg_filter)
+1153:@router.message(group_msg_filter)
+1157:@router.edited_message(group_msg_filter)
+1162:@router.chat_member()
+1254:@router.message()
+1267:@router.edited_message()
+1308:            await _wd.start(bot, dp, log, cmd_router, TEST_CHAT_ID, TEST_USER_ID)
+1324:            await _wd_purge.start(bot, dp, log, cmd_router, TEST_CHAT_ID, TEST_USER_ID)
+1331:        _router_candidate = None
+1333:            _router_candidate = router
+1336:                _router_candidate = cmd_router
+1338:                _router_candidate = None
+1339:        if _router_candidate is not None:
+1342:                    _nside.init_newcomer_sidecar(_router_candidate)
+1343:                    log.info("NEWCOMER_SIDE: attached to router")
+1348:                    _ntest.setup_newcomer_testonly(_router_candidate, log)
+1349:                    log.info("NEWCOMER_TESTONLY: attached to router")
+1353:            log.info("NEWCOMER sidecars: no router variable found; skipping attach")
+1357:    await dp.start_polling(
+1435:        @router.message(~F.chat.type.in_({ChatType.PRIVATE}))
+1455:@router.chat_member()
+[BUNDLE] == rotate ==
+[BUNDLE] bundle saved: /opt/tgbots/bots/support/diag/diag-20251023-181025.log

@@ -1,0 +1,36 @@
+from __future__ import annotations
+
+try:
+    import _watchdog_testuser as _wd
+    HAS_WD = True
+except Exception as _e:
+    HAS_WD = False
+#!/usr/bin/env python3
+
+
+# --- safe stub: avoid NameError from _removed_is_newcomer ---
+def _removed_is_newcomer(user_id: int, chat_id: int) -> bool:
+    """
+    Test-only implementation: respects TEST_USER_ID/TEST_CHAT_ID and NEWCOMER_WINDOW_SECONDS.
+    For all others returns False. No exceptions propagate.
+    """
+    try:
+        # лениво грузим модуль из соседнего файла, чтобы не трогать верх файла
+        import importlib.util, os, logging
+        log = logging.getLogger("support-join-guard")
+        base = os.path.dirname(__file__)
+        mod_path = os.path.join(base, "_newcomer.py")
+        spec = importlib.util.spec_from_file_location("_newcomer", mod_path)
+        if spec and spec.loader:
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)  # type: ignore[attr-defined]
+            return bool(mod.is_newcomer_testpair(int(user_id), int(chat_id)))
+        else:
+            log.warning("NEWCOMER: spec loader not available")
+            return False
+    except Exception as e:
+        try:
+            logging.getLogger("support-join-guard").warning("NEWCOMER: import/use failed: %s", e)
+        except Exception:
+            pass
+        return False

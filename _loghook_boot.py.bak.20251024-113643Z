@@ -1,0 +1,14 @@
+# -*- coding: utf-8 -*-
+"""_loghook_boot: auto-install LOGHOOK handler on interpreter startup."""
+from __future__ import annotations
+try:
+    import _loghook_compat  # compat hook
+except Exception:
+    pass
+import logging
+try:
+    from _loghook_notify import install_on_logger
+    install_on_logger("support-join-guard")
+except Exception as e:
+    # не шумим в stdout/stderr — лишь в системный логгер, если доступен
+    logging.getLogger("support-join-guard").warning("LOGHOOK: boot failed: %r", e)

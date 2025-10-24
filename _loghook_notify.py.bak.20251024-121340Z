@@ -1,0 +1,210 @@
+# -*- coding: utf-8 -*-
+"""
+_loghook_notify: безопасный лог-хук для отправки ЛС админу при первом удалении сообщения новичка.
+Ничего не трогает в боевом коде: просто вешаем logging.Handler на логгер "support-join-guard".
+Правила:
+- Слушаем строки вида: "TESTPURGE: deleted chat=<int> uid=<int> mid=<int> now=<int> until=<int>"
+- Флаг NEWCOMER_NOTIFY_TO_CHAT должен быть истинным (1/true/yes/on) в ENV
+- ADMIN_IDS — пробел/запятая-разделённый список числовых id
+- Отправляем строго ASCII-текст (чтобы исключить любые Unicode-сюрпризы)
+"""
+from __future__ import annotations
+import logging, os, re, json, time
+from urllib.request import Request, urlopen
+from urllib.error import URLError, HTTPError
+
+_LOGGER_NAME = "support-join-guard"
+_RE = re.compile(
+    r"TESTPURGE:\s+deleted\s+chat=(?P<chat>-?\d+)\s+uid=(?P<uid>\d+)\s+mid=(?P<mid>\d+)\s+now=(?P<now>\d+)\s+until=(?P<until>\d+)"
+)
+_CACHE: set[str] = set()
+
+def _flag(name: str) -> bool:
+    v = (os.getenv(name, "0") or "0").strip().lower()
+    return v in {"1","true","yes","on"}
+
+def _parse_admin_ids(raw: str) -> list[int]:
+    vals = []
+    for part in (raw or "").replace(",", " ").split():
+        part = part.strip()
+        if part.isdigit():
+            try: vals.append(int(part))
+            except: pass
+    return vals
+
+def _send_dm(token: str, chat_id: int, text: str) -> bool:
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    data = json.dumps({"chat_id": chat_id, "text": text, "disable_notification": True}).encode("utf-8")
+    req = Request(url, data=data, headers={"Content-Type":"application/json"})
+    try:
+        with urlopen(req, timeout=10) as resp:
+            # 200 и ok=true считаем успехом; но не парсим глубоко — не нужно
+            return resp.status == 200
+    except (URLError, HTTPError):
+        return False
+
+class _OnceNotifyHandler(logging.Handler):
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            msg = record.getMessage()
+        except Exception:
+            return
+        m = _RE.search(msg)
+        if not m:
+            return
+        if not _flag("NEWCOMER_NOTIFY_TO_CHAT"):
+            return
+
+        chat = int(m.group("chat"))
+        uid = int(m.group("uid"))
+        mid = int(m.group("mid"))
+        until = int(m.group("until"))
+
+        key = f"{chat}:{uid}"
+        if key in _CACHE:
+            return
+
+        token = (os.getenv("BOT_TOKEN") or "").strip()
+        if not token:
+            logging.getLogger(_LOGGER_NAME).warning("LOGHOOK: no BOT_TOKEN in env; skip notify")
+            return
+        admins = _parse_admin_ids(os.getenv("ADMIN_IDS",""))
+        if not admins:
+            logging.getLogger(_LOGGER_NAME).warning("LOGHOOK: no ADMIN_IDS in env; skip notify")
+            return
+
+        logging.getLogger(_LOGGER_NAME).info(
+            "LOGHOOK: notify start cid=%s uid=%s mid=%s admins=%s until=%s",
+            chat, uid, mid, admins, until
+        )
+
+        txt = (
+            "Newcomer message was deleted\n"
+            f"chat: {chat}\n"
+            f"user: {uid}\n"
+            f"msg_id: {mid}\n"
+            f"window until: {until}"
+        )
+
+        sent = 0
+        for aid in admins:
+            if _send_dm(token, aid, txt):
+                sent += 1
+
+        if sent > 0:
+            _CACHE.add(key)
+            logging.getLogger(_LOGGER_NAME).info("LOGHOOK: notify sent=%s key=%s", sent, key)
+        else:
+            logging.getLogger(_LOGGER_NAME).warning("LOGHOOK: notify no-sends key=%s", key)
+
+def install_on_logger(logger_name: str = _LOGGER_NAME) -> None:
+    log = logging.getLogger(logger_name)
+    # Не дублируем — если уже висит наш хендлер, выходим
+    for h in log.handlers:
+        if isinstance(h, _OnceNotifyHandler):
+            return
+    h = _OnceNotifyHandler()
+    h.setLevel(logging.INFO)
+    log.addHandler(h)
+    logging.getLogger(_LOGGER_NAME).info(
+        "LOGHOOK: installed handler on '%s' notify_flag=%s",
+        logger_name, _flag("NEWCOMER_NOTIFY_TO_CHAT")
+    )
+
+# --- BEGIN: RU HTML notify (auto-inserted) ---
+def _notify_admins_ru_html(*, chat_id: int, user_id: int, msg_id: int, until: int) -> None:
+    import os, logging
+    log = logging.getLogger(_LOGGER_NAME)
+    token = (os.getenv("BOT_TOKEN") or "").strip()
+    admins = _parse_admin_ids()
+    if not token or not admins:
+        return
+
+    # helper: HTML escape
+    def esc(x):
+        import html
+        return html.escape(str(x), quote=True)
+
+    # resolve chat title & link (if public)
+    chat_title, chat_link = None, None
+    try:
+        import urllib.request, urllib.parse, json
+        api = f"https://api.telegram.org/bot{token}/getChat?" + urllib.parse.urlencode({"chat_id": str(chat_id)})
+        with urllib.request.urlopen(api, timeout=5) as resp:
+            data = json.load(resp)
+        if data.get("ok") and "result" in data:
+            r = data["result"]
+            chat_title = r.get("title") or r.get("first_name") or r.get("last_name") or r.get("username")
+            if r.get("username"):
+                chat_link = f"https://t.me/{r['username']}"
+    except Exception:
+        pass
+    if not chat_title:
+        chat_title = f"chat {chat_id}"
+    if chat_link:
+        chat_html = f'<a href="{esc(chat_link)}">{esc(chat_title)}</a>'
+    else:
+        chat_html = esc(chat_title)
+
+    # resolve user name
+    user_name = None
+    try:
+        import urllib.request, urllib.parse, json
+        api = f"https://api.telegram.org/bot{token}/getChat?" + urllib.parse.urlencode({"chat_id": str(user_id)})
+        with urllib.request.urlopen(api, timeout=5) as resp:
+            udata = json.load(resp)
+        if udata.get("ok") and "result" in udata:
+            u = udata["result"]
+            parts = [u.get("first_name") or "", u.get("last_name") or ""]
+            parts = [p for p in parts if p]
+            nm = " ".join(parts).strip()
+            uname = u.get("username")
+            user_name = (f"{nm} (@{uname})" if nm else f"@{uname}") if uname else (nm or str(user_id))
+    except Exception:
+        pass
+    if not user_name:
+        user_name = str(user_id)
+
+    # newcomer until → dd.mm.yy HH:MM
+    try:
+        import datetime
+        until_str = datetime.datetime.fromtimestamp(int(until)).strftime("%d.%m.%y %H:%M")
+    except Exception:
+        until_str = str(until)
+
+    # we don't have message text (already deleted) — put placeholder
+    text = (
+        f"Сообщение новичка ({esc(user_name)}) удалено\n"
+        f"чат: {chat_html}\n"
+        f"сообщение: (текст недоступен — удалено)\n"
+        f"новичок до: {esc(until_str)}"
+    )
+
+    log.info("LOGHOOK: notify start cid=%s uid=%s mid=%s admins=%s until=%s", chat_id, user_id, msg_id, admins, until)
+    try:
+        import urllib.request, urllib.parse
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        data = urllib.parse.urlencode({
+            "chat_id": str(admins[0]),
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": "true",
+            "disable_notification": "true",
+        }).encode("utf-8")
+        req = urllib.request.Request(url, data=data, method="POST")
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            _ = resp.read()
+        log.info("LOGHOOK: notify sent=1 key=%s:%s", chat_id, user_id)
+    except Exception as e:
+        try:
+            log.warning("LOGHOOK: notify fail admin=%s cid=%s uid=%s err=%r", admins[0] if admins else None, chat_id, user_id, e)
+        except Exception:
+            pass
+
+# keep legacy callers working by aliasing:
+try:
+    _notify_admins_ascii  # type: ignore
+    _notify_admins_ascii = _notify_admins_ru_html  # type: ignore
+except Exception:
+    pass
+# --- END: RU HTML notify (auto-inserted) ---

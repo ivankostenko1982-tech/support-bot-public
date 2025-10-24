@@ -1,0 +1,63 @@
+
+================================================================================
+DIAG HEADER
+================================================================================
+Saved-to: /opt/tgbots/bots/support/diag-20251018-160639Z.txt
+Instance: support
+Unit:     tgbot@support
+Bot dir:  /opt/tgbots/bots/support
+Python:   /opt/tgbots/.venv/bin/python
+Now(UTC): Sat Oct 18 16:06:39 UTC 2025
+Now(Lcl): Sat Oct 18 19:06:39 MSK 2025
+
+================================================================================
+SYSTEM
+================================================================================
+User/Group (service):
+User=tgbot
+Group=tgbot
+
+Unit status (1 line):
+Warning: The unit file, source configuration file or drop-ins of tgbot@support.service changed on disk. Run 'systemctl daemon-reload' to reload units.
+● tgbot@support.service - Telegram bot instance support
+     Loaded: loaded (/etc/systemd/system/tgbot@.service; enabled; vendor preset: enabled)
+     Active: active (running) since Sat 2025-10-18 18:45:35 MSK; 21min ago
+   Main PID: 715189 (python)
+      Tasks: 2 (limit: 14212)
+
+Active processes:
+715187 /opt/tgbots/.venv/bin/python app.py
+715188 /opt/tgbots/.venv/bin/python app.py
+715189 /opt/tgbots/.venv/bin/python app.py
+
+CGroup of unit:
+[no data] systemd-cgls /system.slice/system-tgbot.slice/tgbot@support
+
+
+================================================================================
+PYTHON / AIROGRAM
+================================================================================
+Python 3.10.12
+which python: /opt/tgbots/.venv/bin/python
+
+aiogram (pip):
+Name: aiogram
+Version: 3.22.0
+Summary: Modern and fully asynchronous framework for Telegram Bot API
+Home-page: https://aiogram.dev/
+Author: 
+Author-email: Alex Root Junior <jroot.junior@gmail.com>
+License-Expression: MIT
+Location: /opt/tgbots/.venv/lib/python3.10/site-packages
+Requires: aiofiles, aiohttp, certifi, magic-filter, pydantic, typing-extensions
+Required-by: 
+
+aiogram import sanity:
+aiogram.__version__: 3.22.0
+aiogram path: /opt/tgbots/.venv/lib/python3.10/site-packages/aiogram/__init__.py
+
+================================================================================
+.ENV SNAPSHOT
+================================================================================
+awk: cmd. line:3:       split($0,a,"="); if (length(a[2])>8) a[2]=substr(a[2],1,4)"…"(length(a[2])-8)"…"?substr(a[2],length(a[2])-3);
+awk: cmd. line:3:                                                                                                                       ^ syntax error

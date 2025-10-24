@@ -1,0 +1,821 @@
+
+================================================================================
+DIAG HEADER
+================================================================================
+Saved-to: /opt/tgbots/bots/support/diag-20251018-160932Z.txt
+Instance: support
+Unit:     tgbot@support
+Bot dir:  /opt/tgbots/bots/support
+Python:   /opt/tgbots/.venv/bin/python
+Now(UTC): Sat Oct 18 16:09:32 UTC 2025
+Now(Lcl): Sat Oct 18 19:09:32 MSK 2025
+
+================================================================================
+SYSTEM
+================================================================================
+User/Group (service):
+User=tgbot
+Group=tgbot
+
+Unit status (1 line):
+Warning: The unit file, source configuration file or drop-ins of tgbot@support.service changed on disk. Run 'systemctl daemon-reload' to reload units.
+● tgbot@support.service - Telegram bot instance support
+     Loaded: loaded (/etc/systemd/system/tgbot@.service; enabled; vendor preset: enabled)
+     Active: active (running) since Sat 2025-10-18 18:45:35 MSK; 23min ago
+   Main PID: 715189 (python)
+      Tasks: 2 (limit: 14212)
+
+Active processes:
+715187 /opt/tgbots/.venv/bin/python app.py
+715188 /opt/tgbots/.venv/bin/python app.py
+715189 /opt/tgbots/.venv/bin/python app.py
+
+CGroup of unit:
+[no data] systemd-cgls /system.slice/system-tgbot.slice/tgbot@support
+
+
+================================================================================
+PYTHON / AIROGRAM
+================================================================================
+Python 3.10.12
+which python: /opt/tgbots/.venv/bin/python
+
+aiogram (pip):
+Name: aiogram
+Version: 3.22.0
+Summary: Modern and fully asynchronous framework for Telegram Bot API
+Home-page: https://aiogram.dev/
+Author: 
+Author-email: Alex Root Junior <jroot.junior@gmail.com>
+License-Expression: MIT
+Location: /opt/tgbots/.venv/lib/python3.10/site-packages
+Requires: aiofiles, aiohttp, certifi, magic-filter, pydantic, typing-extensions
+Required-by: 
+
+aiogram import sanity:
+aiogram.__version__: 3.22.0
+aiogram path: /opt/tgbots/.venv/lib/python3.10/site-packages/aiogram/__init__.py
+
+================================================================================
+.ENV SNAPSHOT
+================================================================================
+# === Required ===
+BOT_TOKEN=8453…VGw4
+VERIFY_SECRET=jslk…klgs
+
+#@krasnogorskichat Id: -1001209607608 @odingrad_centr Id: -1001404423510 @portland_moscow Id: -1001878435829 @odingrad Id: -1001437148632 @mkrdesna Id: -1001276110445 @odingrad_lesnoy Id: -1001329487433
+# @rasskazovochat Id: -1001472589350 @chatvatutinki Id: -1001355629107 @odingrad_boltalka Id: -1001210525113 @innovaciyachat Id: -1001274723644 @odingrad_semeyniy Id: -1001413291597
+# === Chats ===
+TARGET_CHAT_IDS="-1002099408662,-1001209607608,-1001404423510,-1001878435829,-1001437148632,-1001276110445,-1001329487433,-1001472589350,-1001355629107,-1001210525113,-1001274723644,-1001413291597"
+
+# === (optional) Admins ===
+# ADMIN_IDS=123456789 987654321
+# ADMIN_CONTACT_OVERRIDE=yourpublicadmin
+
+# === Behaviour toggles ===
+DELETE_SYSTEM_MESSAGES=true
+LOCKDOWN_NONADMIN_BOTS=true
+AGGRESSIVE_CHANNEL_ANTILINK=true
+
+# === Timers ===
+JOIN_REQUEST_TTL=600
+EXPIRE_SWEEP_INTERVAL=20
+NEWCOMER_WINDOW_SECONDS=86400
+
+# === SQLite path (must be writable by systemd sandbox) ===
+SQLITE_PATH=/opt/tgbots/bots/support/join_guard_state.db
+SWEEPER_MODE=live
+LOG_LEVEL=DEBUG
+NEWCOMER_PROBE=1
+NEWCOMER_TRACE=1
+
+TEST_CHAT_ID=-1002099408662
+TRACE_TEST_CHAT=1
+
+HUMAN_MIN_DELAY=3
+HUMAN_TTL_STEP1=180
+HUMAN_TTL_STEP2=60
+# GUARD_SECRET опционален (сейчас не используется, т.к. токены хранятся в БД)
+
+DIAG_ENABLE=1               # включить/выключить (по умолчанию 1)
+DIAG_DIR=/opt/tgbots/bots/support/diag     # куда писать (по умолчанию рядом с БД)
+DIAG_BASENAME=diag          # префикс имени файла
+DIAG_DB_ROWS=20             # сколько строк примеров выводить из таблиц
+DIAG_INCLUDE_DB=1           # включать ли блок БД
+DIAG_INCLUDE_ENV=1          # включать ли блок ENV
+DIAG_INCLUDE_ROUTERS=1      # включать ли роутеры/хендлеры (best-effort)
+DIAG_KEEP=15                # сколько последних файлов держать
+
+# где лежат все служебные .sh
+UTILS_DIR=/opt/tgbots/utils
+
+# пин рабочей версии aiogram (пример)
+AIROGRAM_VERSION=3.4.1
+
+
+
+================================================================================
+ROUTERS / HANDLERS (grep from app.py)
+================================================================================
+# include_router:
+303:dp.include_router(cmd_router)
+304:dp.include_router(human_guard_router)
+305:dp.include_router(router)
+
+# 'Я человек' / hg1/hg2/v:
+295:human_guard_router = Router(name="human_guard")
+304:dp.include_router(human_guard_router)
+493:def build_verify_cbdata(chat_id: int, user_id: int) -> str:
+499:def parse_and_verify_cbdata(cbdata: str, actual_user_id: int) -> tuple[bool, Optional[int], Optional[str]]:
+515:def verify_keyboard(chat_id: int, user_id: int) -> 'InlineKeyboardMarkup':
+517:    kb.button(text="✅ Я человек (подтвердить)", callback_data="refresh")
+525:        kb.button(text=label, callback_data=build_verify_cbdata(chat_id, user_id))
+915:            reply_markup=verify_keyboard(chat_id=event.chat.id, user_id=event.from_user.id),
+945:            reply_markup=verify_keyboard(chat_id=chat_id, user_id=message.from_user.id),
+953:@router.callback_query(F.data == "refresh")
+955:@router.callback_query(F.data == "noop")
+959:    await cb.answer("Сначала подтвердите заявку через кнопку ‘Я человек’ и эмодзи-квиз.", show_alert=True)
+981:            reply_markup=verify_keyboard(chat_id=chat_id, user_id=cb.from_user.id),
+993:@router.callback_query(F.data.startswith("v:"))
+994:async def on_verify(cb: 'CallbackQuery'):
+996:    if cb.data.startswith(("hg1:", "hg2:", "v1:", "q2:")):
+999:    if cb.data.startswith(("hg1:", "hg2:", "hg1:", "hg2:")):
+1001:    ok, chat_id, err = parse_and_verify_cbdata(cb.data, actual_user_id=cb.from_user.id)
+1029:        # await bot.approve_chat_join_request(chat_id=chat_id, user_id=cb.from_user.id)
+1030:        # await bot.approve_chat_join_request(chat_id=chat_id, user_id=cb.from_user.id)
+1050:        logging.exception("approve_chat_join_request failed")
+1141:                # await bot.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
+1266:        allowed_updates = ['message','edited_message','chat_member','my_chat_member','chat_join_request','callback_query'],
+1380:human_guard_router = _Router_hg(name="human_guard")
+1434:    payload = {"type": "verify1", "uid": int(user_id), "cid": int(chat_id), "iat": int(time.time())}
+1436:    cbdata = f"hg1:{tok}"
+1437:    kb = [[_IKBtn_hg(text="✅ Я человек", callback_data=cbdata)]]
+1440:# Step1 handler: verify1
+1442:def verify_keyboard(chat_id: int, user_id: int):
+1444:    Выдаёт кнопку 'Я человек' через Human-Guard step1 (hg1: токен),
+1448:        payload = {"type": "verify1", "uid": int(user_id), "cid": int(chat_id), "iat": int(time.time())}
+1450:        cbdata = f"hg1:{tok}"
+1452:        kb.button(text="✅ Я человек", callback_data=cbdata)
+1456:        kb.button(text="✅ Я человек (обновить)", callback_data="refresh")
+1458:@human_guard_router.callback_query(_F_hg.data.startswith("hg1:"))
+1464:    payload = get_token(token_id, expected_type="verify1")
+1490:        kb.button(text=e, callback_data=f"hg2:{quiz_tok}:{idx}")
+1512:@human_guard_router.callback_query(_F_hg.data.startswith("hg2:"))
+1566:            await cb.bot.approve_chat_join_request(cid, uid)
+1591:        log.warning("human_guard include deferred: %s", e)
+1667:                # Count callback handlers by prefix (v:/hg1:/hg2:)
+1668:                prefixes = ("v:", "hg1:", "hg2:")
+
+# verify_keyboard def line:
+515:def verify_keyboard(chat_id: int, user_id: int) -> 'InlineKeyboardMarkup':
+1442:def verify_keyboard(chat_id: int, user_id: int):
+
+# approve_chat_join_request:
+1029:        # await bot.approve_chat_join_request(chat_id=chat_id, user_id=cb.from_user.id)
+1030:        # await bot.approve_chat_join_request(chat_id=chat_id, user_id=cb.from_user.id)
+1050:        logging.exception("approve_chat_join_request failed")
+1141:                # await bot.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
+1566:            await cb.bot.approve_chat_join_request(cid, uid)
+
+# url= (возможные «Перейти в группу» ссылки):
+NO url= BUTTONS FOUND
+
+# on_refresh_dummy_guard signature:
+953:@router.callback_query(F.data == "refresh")
+
+================================================================================
+HUMAN GUARD SNIPPET (context)
+================================================================================
+# Optional systemd watchdog
+try:
+    from sdnotify import SystemdNotifier  # type: ignore
+except Exception:  # pragma: no cover
+    SystemdNotifier = None  # type: ignore
+
+# ── Meta / version ──────────────────────────────────────────────────────────────
+APP_NAME = "support-join-guard"
+APP_VERSION = os.getenv("APP_VERSION", "2.1.0")  # bump when logic changes
+START_MONO = time.monotonic()
+START_TS = int(time.time())
+
+# ── Logging ─────────────────────────────────────────────────────────────────────
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+log = logging.getLogger(APP_NAME)
+
+# ── ENV helpers ─────────────────────────────────────────────────────────────────
+def _get_env_int(key: str, default: int) -> int:
+    raw = os.getenv(key)
+    if raw is None or raw.strip() == "":
+        return int(default)
+    try:
+        return int(raw.strip())
+    except Exception:
+        raise SystemExit(f"ENV {key} must be integer, got: {raw!r}")
+
+def _parse_id_list(raw: str) -> Set[int]:
+    ids: Set[int] = set()
+    if not raw or not raw.strip():
+        return ids
+    for token in raw.replace(",", " ").split():
+        if "=" in token:
+            log.warning("Ignoring non-id token in list: %r", token); continue
+        try:
+            ids.add(int(token))
+        except ValueError:
+            log.warning("Skipping malformed ID: %r", token)
+    return ids
+
+# ── ENV ─────────────────────────────────────────────────────────────────────────
+BOT_TOKEN = (os.getenv("BOT_TOKEN") or "").strip()
+VERIFY_SECRET = (os.getenv("VERIFY_SECRET") or "").strip()
+if not BOT_TOKEN:
+    raise SystemExit("BOT_TOKEN is required in /etc/tgbots/support.env")
+if not VERIFY_SECRET:
+    raise SystemExit("VERIFY_SECRET is required in /etc/tgbots/support.env")
+
+JOIN_REQUEST_TTL = _get_env_int("JOIN_REQUEST_TTL", 600)
+SQLITE_PATH = os.getenv("SQLITE_PATH", "/opt/tgbots/bots/support/join_guard_state.db")
+ENV_DELETE_SYSTEM_MESSAGES = os.getenv("DELETE_SYSTEM_MESSAGES", "false").lower() in {"1","true","yes","on"}
+EXPIRE_SWEEP_INTERVAL = _get_env_int("EXPIRE_SWEEP_INTERVAL", 20)
+ADMIN_CONTACT_OVERRIDE = (os.getenv("ADMIN_CONTACT_OVERRIDE") or "").strip().lstrip("@")
+NEWCOMER_WINDOW_SECONDS = _get_env_int("NEWCOMER_WINDOW_SECONDS", 24*60*60)
+ENV_LOCKDOWN_NONADMIN_BOTS = os.getenv("LOCKDOWN_NONADMIN_BOTS", "true").lower() in {"1","true","yes","on"}
+AGGRESSIVE_CHANNEL_ANTILINK = os.getenv("AGGRESSIVE_CHANNEL_ANTILINK", "false").lower() in {"1","true","yes","on"}
+
+# 🔎 Тестовый чат и флаг тотального трассирования
+TEST_CHAT_ID = int(os.getenv("TEST_CHAT_ID", "0") or "0")
+TRACE_TEST_CHAT = os.getenv("TRACE_TEST_CHAT", "0").lower() in {"1","true","yes","on"}
+
+log.info(
+    "BOOT: app.py loaded file=%s SQLITE_PATH=%s WINDOW=%s",
+    __file__,
+    SQLITE_PATH if "SQLITE_PATH" in globals() else os.getenv("SQLITE_PATH"),
+    os.getenv("NEWCOMER_WINDOW_SECONDS","86400"),
+)
+
+ALLOWLIST = _parse_id_list(os.getenv("TARGET_CHAT_IDS", "")) | _parse_id_list(os.getenv("TARGET_CHAT_ID", ""))
+if ALLOWLIST:
+    log.info("Allowlist enabled for chat_ids=%s", sorted(ALLOWLIST))
+else:
+    log.info("Allowlist is empty — bot will accept join requests from ANY chat")
+
+ADMIN_IDS = _parse_id_list(os.getenv("ADMIN_IDS", ""))
+if ADMIN_IDS:
+    log.info("Static admin ids set: %s", sorted(ADMIN_IDS))
+
+# ── Bot/Dispatcher/Router ───────────────────────────────────────────────────────
+bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+dp = Dispatcher()
+human_guard_router = Router(name="human_guard")
+
+
+
+# ВАЖНО: отдельный роутер для команд — подключаем ПЕРВЫМ, чтобы команды имели приоритет
+cmd_router = Router(name="commands")
+
+router = Router(name="main")
+dp.include_router(cmd_router)
+dp.include_router(human_guard_router)
+dp.include_router(router)
+
+
+
+
+
+
+
+
+# ── App State ───────────────────────────────────────────────────────────────────
+@dataclass
+class AppState:
+    sys_clean_enabled: bool = False
+    me_id: Optional[int] = None
+    me_username: Optional[str] = None
+    botlock_enabled: bool = True
+    diag_enabled: bool = False  # toggle via /diag
+
+state = AppState()
+
+# ── SQLite ──────────────────────────────────────────────────────────────────────
+db_dir = os.path.dirname(SQLITE_PATH) or "."
+os.makedirs(db_dir, exist_ok=True)
+
+## EARLY _open_conn shim (auto) ##
+try:
+    _open_conn  # type: ignore[name-defined]
+except Exception:
+    import sqlite3
+    from contextlib import closing
+    def _open_conn():
+        conn = sqlite3.connect(SQLITE_PATH, timeout=10, isolation_level=None)
+        try: conn.execute("PRAGMA journal_mode=WAL;")
+        except Exception: pass
+        try: conn.execute("PRAGMA busy_timeout=5000;")
+        except Exception: pass
+        try: conn.execute("PRAGMA synchronous=NORMAL;")
+        except Exception: pass
+        return conn
+## /EARLY shim ##
+def init_db() -> None:
+    with closing(_open_conn()) as conn:
+        cur = conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL;")
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pending_requests (
+                user_id      INTEGER NOT NULL,
+                chat_id      INTEGER NOT NULL,
+                chat_title   TEXT,
+                requested_at INTEGER NOT NULL,
+                PRIMARY KEY (user_id, chat_id)
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS approvals (
+                user_id     INTEGER NOT NULL,
+                chat_id     INTEGER NOT NULL,
+                approved_at INTEGER NOT NULL,
+                PRIMARY KEY (user_id, chat_id)
+            )
+            """
+        )
+        conn.commit()
+
+def db_get_setting(key: str) -> Optional[str]:
+    with closing(_open_conn()) as conn:
+        cur = conn.execute("SELECT value FROM settings WHERE key=?", (key,))
+        row = cur.fetchone()
+        return row[0] if row else None
+
+def db_set_setting(key: str, value: str) -> None:
+    with closing(_open_conn()) as conn:
+        conn.execute(
+            "INSERT INTO settings(key,value) VALUES(?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, value),
+        )
+        conn.commit()
+
+def set_pending(user_id: int, chat_id: int, chat_title: str) -> None:
+    with closing(_open_conn()) as conn:
+        conn.execute(
+            """
+            INSERT INTO pending_requests(user_id, chat_id, chat_title, requested_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id, chat_id) DO UPDATE SET
+                chat_title=excluded.chat_title,
+                requested_at=excluded.requested_at
+            """,
+            (user_id, chat_id, chat_title, int(time.time())),
+        )
+        conn.commit()
+
+def clear_pending(user_id: int, chat_id: int) -> None:
+    with closing(_open_conn()) as conn:
+        conn.execute("DELETE FROM pending_requests WHERE user_id=? AND chat_id=?", (user_id, chat_id))
+        conn.commit()
+
+def record_approval(user_id: int, chat_id: int) -> None:
+    """
+    Фиксирует одобрение пользователя в чате:
+    - если записи ещё нет, создаёт её
+    - если есть, обновляет approved_at на текущее время
+    """
+    ts = int(time.time())
+    with closing(_open_conn()) as conn:
+        conn.execute(
+            """
+            INSERT INTO approvals(user_id, chat_id, approved_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id, chat_id) DO UPDATE SET
+                approved_at=excluded.approved_at
+            """,
+            (user_id, chat_id, ts),
+        )
+        conn.commit()
+
+# ── Admin & bot rights checks ───────────────────────────────────────────────────
+async def _get_chat_member_safe(chat_id: int, user_id: int) -> Optional['ChatMember']:
+    try:
+        return await bot.get_chat_member(chat_id, user_id)
+    except Exception as e:
+        log.debug("get_chat_member failed chat=%s uid=%s: %s", chat_id, user_id, e)
+        return None
+
+def _is_admin_cm(cm: Optional['ChatMember']) -> bool:
+    return isinstance(cm, (ChatMemberAdministrator, ChatMemberOwner))
+
+async def is_user_admin(user_id: Optional[int], chat_id_context: Optional[int] = None) -> bool:
+    if user_id is None:
+        return False
+    if user_id in ADMIN_IDS:
+        return True
+    if chat_id_context is not None:
+        cm = await _get_chat_member_safe(chat_id_context, user_id)
+        if _is_admin_cm(cm):
+            return True
+    # Only current chat matters (plus explicit ADMIN_IDS). No cross-chat admin inference.
+    return False
+
+async def log_bot_rights(chat_id: int) -> None:
+    try:
+        me = await bot.get_me()
+        cm = await _get_chat_member_safe(chat_id, me.id)
+        if cm is None:
+            log.warning("BOT-RIGHTS: cannot read bot ChatMember in chat=%s", chat_id)
+            return
+        role = getattr(cm, "status", "unknown")
+        can_send = True
+        if role == "restricted":
+            perms = getattr(cm, "permissions", None)
+            if isinstance(perms, ChatPermissions):
+                can_send = bool(getattr(perms, "can_send_messages", False))
+        log.info("BOT-RIGHTS: chat=%s role=%s can_send=%s", chat_id, role, can_send)
+        if not can_send:
+            log.warning("BOT-RIGHTS: bot cannot send messages to chat=%s — проверьте права/ограничения", chat_id)
+    except Exception as e:
+        log.debug("BOT-RIGHTS: failed for chat=%s: %s", chat_id, e)
+
+async def ensure_admin(m: 'Message') -> bool:
+    chat_id_ctx = m.chat.id if m.chat else None
+    user_id = m.from_user.id if m.from_user else None
+    sender_chat_id = m.sender_chat.id if m.sender_chat else None
+    if chat_id_ctx:
+        await log_bot_rights(chat_id_ctx)
+    if sender_chat_id and chat_id_ctx and sender_chat_id == chat_id_ctx:
+        return True
+    ok = await is_user_admin(user_id, chat_id_ctx)
+    log.debug("ensure_admin: chat=%s uid=%s -> %s", chat_id_ctx, user_id, ok)
+    return ok
+
+# ── HMAC helpers ────────────────────────────────────────────────────────────────
+def _sig16(payload: str) -> str:
+    import hashlib
+    mac = hmac.new(VERIFY_SECRET.encode('utf-8'), payload.encode('utf-8'), digestmod=hashlib.sha256).digest()
+    return mac[:8].hex()
+
+def build_verify_cbdata(chat_id: int, user_id: int) -> str:
+    ts = int(time.time())
+    core = f"{chat_id}:{user_id}:{ts}"
+    sig = _sig16(core)
+    return f"v:{chat_id}:{ts}:{sig}"
+
+def parse_and_verify_cbdata(cbdata: str, actual_user_id: int) -> tuple[bool, Optional[int], Optional[str]]:
+    if not cbdata.startswith("v:"):
+        return (False, None, "Некорректные данные")
+    try:
+        _, chat_id_s, ts_s, sig = cbdata.split(":", 3)
+        chat_id = int(chat_id_s); ts = int(ts_s)
+    except Exception:
+        return (False, None, "Некорректные данные")
+    if int(time.time()) - ts > JOIN_REQUEST_TTL + 30:
+        return (False, None, "Время действия истекло")
+    core = f"{chat_id}:{actual_user_id}:{ts}"
+    if _sig16(core) != sig:
+        return (False, None, "Подпись не сходится")
+    return (True, chat_id, None)
+
+# ── UI helpers ──────────────────────────────────────────────────────────────────
+def verify_keyboard(chat_id: int, user_id: int) -> 'InlineKeyboardMarkup':
+
+================================================================================
+PY COMPILE (syntax)
+================================================================================
+syntax OK
+
+================================================================================
+SQLITE SCHEMA + SNAPSHOT
+================================================================================
+# DB path: /opt/tgbots/bots/support/join_guard_state.db
+CREATE TABLE pending_requests (
+                user_id      INTEGER NOT NULL,
+                chat_id      INTEGER NOT NULL,
+                chat_title   TEXT,
+                requested_at INTEGER NOT NULL,
+                PRIMARY KEY (user_id, chat_id)
+            );
+CREATE TABLE settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+CREATE TABLE approvals (
+                user_id     INTEGER NOT NULL,
+                chat_id     INTEGER NOT NULL,
+                approved_at INTEGER NOT NULL, newcomer_until INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (user_id, chat_id)
+            );
+CREATE TABLE guard_tokens (
+                token TEXT PRIMARY KEY,
+                payload TEXT NOT NULL,
+                exp INTEGER NOT NULL,
+                used INTEGER NOT NULL DEFAULT 0
+            );
+
+# table counts:
+approvals|15
+guard_tokens|0
+pending_requests|1
+pending_requests|4
+settings|2
+
+# pending_requests (top 20):
+8286958650,-1001274723644,"Чат ЖК «Инновация» Гранель",1760803304
+
+# approvals (top 20):
+1264572013,-1001276110445,1760780839,0
+314212132,-1001355629107,1760779794,0
+798305528,-1001276110445,1760779046,0
+703888795,-1001472589350,1760773667,0
+412043665,-1001413291597,1760740741,0
+1417211536,-1001355629107,1760739222,0
+1801668614,-1001355629107,1760737007,0
+1375292923,-1001209607608,1760733822,0
+998949771,-1001274723644,1760731574,0
+1166690655,-1001355629107,1760730107,0
+8286693390,-1001209607608,1760729968,0
+6315811713,-1001355629107,1760729897,0
+7556928299,-1001472589350,1760718759,0
+7944218984,-1001210525113,1760718466,0
+8184227618,-1001210525113,1760718236,0
+
+# guard_tokens stats:
+""||
+
+# guard_tokens (fresh, unused, top 20):
+
+================================================================================
+FILES & PERMISSIONS
+================================================================================
+UTILS_DIR: /opt/tgbots/utils
+total 492
+-rw-r--r-- 1 tgbot tgbot  2298 2025-10-17 13:07 app_leave_handler_patch.diff
+-rwxr-xr-x 1 tgbot tgbot  4413 2025-10-17 12:37 check_newcomer_cleanup.sh
+-rwxr-xr-x 1 tgbot tgbot   790 2025-10-17 13:07 cleanup_user_state.sh
+-rw-r--r-- 1 root  root  22061 2025-10-18 10:56 context-support-20251018-075610Z.tar.gz
+-rw-r--r-- 1 root  root  44889 2025-10-18 10:56 context-support-20251018-075610Z.txt
+-rw-r--r-- 1 root  root  42284 2025-10-18 18:06 diag-20251018-150619Z.txt
+-rw-r--r-- 1 root  root  40155 2025-10-18 18:11 diag-20251018-151113Z.txt
+-rw-r--r-- 1 root  root  35895 2025-10-18 18:14 diag-20251018-151438Z.txt
+-rw-r--r-- 1 root  root  36209 2025-10-18 18:19 diag-20251018-151921Z.txt
+-rw-r--r-- 1 root  root  40218 2025-10-18 18:22 diag-20251018-152255Z.txt
+-rw-r--r-- 1 root  root  39972 2025-10-18 18:34 diag-20251018-153418Z.txt
+-rw-r--r-- 1 root  root  43290 2025-10-18 18:51 diag-20251018-155131Z.txt
+-rwxr-xr-x 1 tgbot tgbot  9568 2025-10-18 19:09 diag.sh
+-rw-r--r-- 1 root  root   1352 2025-10-17 22:19 fix_any_empty_defs.py
+-rw-r--r-- 1 root  root   1111 2025-10-17 22:21 fix_empty_try_blocks.py
+-rw-r--r-- 1 root  root   1688 2025-10-17 22:15 fix_indent_trace_v2.py
+-rw-r--r-- 1 root  root   4030 2025-10-17 22:25 fix_orphan_try_blocks.py
+-rw-r--r-- 1 root  root   1395 2025-10-17 22:13 fix_trace_defs.py
+-rw-r--r-- 1 root  root   3032 2025-10-17 22:17 fix_trace_defs_v3.py
+-rwxr-xr-x 1 tgbot tgbot  2311 2025-10-17 14:07 get_chat_member_debug_v2.sh
+-rwxr-xr-x 1 tgbot tgbot  2007 2025-10-17 14:13 get_chat_member_debug_v3.sh
+-rwxr--r-- 1 root  root   4366 2025-10-18 18:02 hg_hotfix4.sh
+-rwxr-xr-x 1 tgbot tgbot  6229 2025-10-17 13:33 newcomer_cleanup_e2e.sh
+-rwxr-xr-x 1 root  root   4276 2025-10-17 21:39 newcomer_smoketest.sh
+-rwxr-xr-x 1 root  root   1082 2025-10-18 17:39 pin_aiogram.sh
+-rwxr-xr-x 1 tgbot tgbot  7810 2025-10-17 16:59 prune_approvals_sweeper_v2.py
+-rw-r--r-- 1 tgbot tgbot  7050 2025-10-17 16:54 prune_approvals_sweeper_v2.py.bak.20251017_165842
+-rwxr--r-- 1 root  root   3748 2025-10-18 18:14 sqlite_hotfix.sh
+-rwxr-xr-x 1 root  root   1768 2025-10-18 18:21 sqlite_openconn_shim_fix.sh
+-rwxr-xr-x 1 root  root   5872 2025-10-18 18:17 sqlite_unstuck_and_patch.sh
+-rwxr-xr-x 1 root  root   7318 2025-10-18 10:51 support_context_capture.sh
+-rw-r--r-- 1 root  root   4510 2025-10-18 10:57 support_ctx.env
+lrwxrwxrwx 1 root  root     11 2025-10-18 17:33 tgbots -> /etc/tgbots
+-rwxr-xr-x 1 tgbot tgbot  3203 2025-10-17 12:43 validate_cleanup_flow.sh
+-rwxr-xr-x 1 tgbot tgbot   303 2025-10-17 13:07 watch_leave_events.sh
+
+app.py stat:
+  File: /opt/tgbots/bots/support/app.py
+  Size: 76140     	Blocks: 152        IO Block: 4096   regular file
+Device: fc02h/64514d	Inode: 45833       Links: 1
+Access: (0644/-rw-r--r--)  Uid: (  997/   tgbot)   Gid: (  997/   tgbot)
+Access: 2025-10-18 18:22:00.400740135 +0300
+Modify: 2025-10-18 18:22:00.368738963 +0300
+Change: 2025-10-18 18:22:00.368738963 +0300
+ Birth: 2025-10-18 18:10:33.715602519 +0300
+
+DB dir writeability for tgbot:
+DB_DIR: /opt/tgbots/bots/support
+f: /opt/tgbots/bots/support
+f: /opt/tgbots/bots/support
+drwxr-xr-x root  root  /
+drwxr-xr-x root  root  opt
+drwxr-xr-x tgbot tgbot tgbots
+drwxr-xr-x tgbot tgbot bots
+drwxrwxr-x tgbot tgbot support
+
+whoami: root
+id tgbot:
+uid=997(tgbot) gid=997(tgbot) groups=997(tgbot)
+
+ls -l DB and dir:
+total 1184
+drwxrwxr-x 2 tgbot tgbot  4096 Oct 18 19:09 __pycache__
+-rw-r--r-- 1 tgbot tgbot 76140 Oct 18 18:22 app.py
+-rw-r--r-- 1 tgbot tgbot 47090 Oct 17 14:50 app.py--
+-rw-r--r-- 1 tgbot tgbot 59172 Oct 18 15:10 app.py-15.21
+-rw-r--r-- 1 tgbot tgbot 41014 Oct 15 22:28 app.py-17.10
+-rw-r--r-- 1 tgbot tgbot 49266 Oct 17 18:37 app.py-22.33
+-rw-r--r-- 1 tgbot tgbot 45409 Oct 17 11:29 app.py-last
+-rw-r--r-- 1 tgbot tgbot 33873 Oct 15 13:05 app.py-old
+-rw-r--r-- 1 tgbot tgbot 49876 Oct 17 22:33 app.py.bak-2025-10-17-2236
+-rw-r--r-- 1 tgbot tgbot 75134 Oct 18 17:14 app.py.bak.20251018-144446
+-rw-r--r-- 1 tgbot tgbot 75135 Oct 18 17:44 app.py.bak.20251018-145033
+-rw-r--r-- 1 tgbot tgbot 76000 Oct 18 17:50 app.py.bak.20251018-145227
+-rw-r--r-- 1 tgbot tgbot 75843 Oct 18 17:52 app.py.bak.20251018-151010Z
+-rw-r--r-- 1 tgbot tgbot 75843 Oct 18 17:52 app.py.bak.20251018-151026Z
+-rw-r--r-- 1 tgbot tgbot 75587 Oct 18 18:10 app.py.bak.20251018-151819Z
+-rw-r--r-- 1 tgbot tgbot 75587 Oct 18 18:18 app.py.bak.20251018-152200Z
+drwxr-x--- 2 tgbot tgbot  4096 Oct 18 18:03 diag
+-rw-r--r-- 1 root  root   2563 Oct 18 19:06 diag-20251018-160639Z.txt
+-rw-r--r-- 1 root  root  27819 Oct 18 19:09 diag-20251018-160932Z.txt
+-rw-rw-r-- 1 tgbot tgbot 49152 Oct 18 19:01 join_guard_state.db
+-rw-r--r-- 1 tgbot tgbot 49152 Oct 17 12:25 join_guard_state.db.bak.20251017_132226
+-rw-r--r-- 1 tgbot tgbot 49152 Oct 17 12:25 join_guard_state.db.bak.20251017_133016
+-rw-r--r-- 1 tgbot tgbot 49152 Oct 17 12:25 join_guard_state.db.bak.20251017_133929
+-rw-rw-r-- 1 tgbot tgbot 49152 Oct 18 19:01 /opt/tgbots/bots/support/join_guard_state.db
+
+
+================================================================================
+LAST LOGS (raw tail)
+================================================================================
+2025-10-18T18:22:12+0300 ivan8.fvds.ru python[707654]: 2025-10-18 18:22:12,162 | INFO | aiogram.event | Update id=628015032 is handled. Duration 0 ms by bot id=8453324297
+2025-10-18T18:22:12+0300 ivan8.fvds.ru python[707654]: 2025-10-18 18:22:12,242 | INFO | aiogram.event | Update id=628015035 is handled. Duration 66 ms by bot id=8453324297
+2025-10-18T18:22:12+0300 ivan8.fvds.ru python[707654]: 2025-10-18 18:22:12,526 | INFO | support-join-guard | DM failed (maybe user hasn't started bot yet): Telegram server says - Forbidden: bot can't initiate conversation with a user
+2025-10-18T18:22:12+0300 ivan8.fvds.ru python[707654]: 2025-10-18 18:22:12,526 | INFO | aiogram.event | Update id=628015037 is handled. Duration 299 ms by bot id=8453324297
+2025-10-18T18:22:12+0300 ivan8.fvds.ru python[707654]: 2025-10-18 18:22:12,527 | INFO | support-join-guard | DM failed (maybe user hasn't started bot yet): Telegram server says - Forbidden: bot can't initiate conversation with a user
+2025-10-18T18:22:12+0300 ivan8.fvds.ru python[707654]: 2025-10-18 18:22:12,527 | INFO | aiogram.event | Update id=628015033 is handled. Duration 365 ms by bot id=8453324297
+2025-10-18T18:22:12+0300 ivan8.fvds.ru python[707654]: 2025-10-18 18:22:12,528 | INFO | support-join-guard | DM failed (maybe user hasn't started bot yet): Telegram server says - Forbidden: bot can't initiate conversation with a user
+2025-10-18T18:22:12+0300 ivan8.fvds.ru python[707654]: 2025-10-18 18:22:12,528 | INFO | aiogram.event | Update id=628015034 is handled. Duration 357 ms by bot id=8453324297
+2025-10-18T18:22:12+0300 ivan8.fvds.ru python[707654]: 2025-10-18 18:22:12,528 | INFO | support-join-guard | DM failed (maybe user hasn't started bot yet): Telegram server says - Forbidden: bot can't initiate conversation with a user
+2025-10-18T18:22:12+0300 ivan8.fvds.ru python[707654]: 2025-10-18 18:22:12,528 | INFO | aiogram.event | Update id=628015036 is handled. Duration 306 ms by bot id=8453324297
+2025-10-18T18:22:12+0300 ivan8.fvds.ru python[707654]: 2025-10-18 18:22:12,528 | INFO | support-join-guard | DM failed (maybe user hasn't started bot yet): Telegram server says - Forbidden: bot can't initiate conversation with a user
+2025-10-18T18:22:12+0300 ivan8.fvds.ru python[707654]: 2025-10-18 18:22:12,528 | INFO | aiogram.event | Update id=628015039 is handled. Duration 294 ms by bot id=8453324297
+2025-10-18T18:22:12+0300 ivan8.fvds.ru python[707654]: 2025-10-18 18:22:12,528 | INFO | support-join-guard | DM failed (maybe user hasn't started bot yet): Telegram server says - Forbidden: bot can't initiate conversation with a user
+2025-10-18T18:22:12+0300 ivan8.fvds.ru python[707654]: 2025-10-18 18:22:12,529 | INFO | aiogram.event | Update id=628015038 is handled. Duration 298 ms by bot id=8453324297
+2025-10-18T18:22:12+0300 ivan8.fvds.ru python[707654]: 2025-10-18 18:22:12,529 | INFO | support-join-guard | DM failed (maybe user hasn't started bot yet): Telegram server says - Forbidden: bot can't initiate conversation with a user
+2025-10-18T18:22:12+0300 ivan8.fvds.ru python[707654]: 2025-10-18 18:22:12,529 | INFO | aiogram.event | Update id=628015040 is handled. Duration 291 ms by bot id=8453324297
+2025-10-18T18:22:17+0300 ivan8.fvds.ru python[707654]: 2025-10-18 18:22:17,063 | INFO | support-join-guard | Expirer loop started: interval=20s ttl=600s
+2025-10-18T18:22:17+0300 ivan8.fvds.ru python[707654]: 2025-10-18 18:22:17,064 | INFO | support-join-guard | TTL expired: approving & restricting user_id=5338639530 chat_id=-1001404423510
+2025-10-18T18:22:17+0300 ivan8.fvds.ru python[707654]: 2025-10-18 18:22:17,181 | INFO | aiogram.event | Update id=628015041 is handled. Duration 0 ms by bot id=8453324297
+2025-10-18T18:22:17+0300 ivan8.fvds.ru python[707654]: 2025-10-18 18:22:17,508 | INFO | support-join-guard | TTL expired: approving & restricting user_id=6700029291 chat_id=-1001413291597
+2025-10-18T18:22:17+0300 ivan8.fvds.ru python[707654]: 2025-10-18 18:22:17,925 | INFO | support-join-guard | TTL expired: approving & restricting user_id=8041298890 chat_id=-1001413291597
+2025-10-18T18:22:18+0300 ivan8.fvds.ru python[707654]: 2025-10-18 18:22:18,208 | INFO | aiogram.event | Update id=628015042 is handled. Duration 0 ms by bot id=8453324297
+2025-10-18T18:22:18+0300 ivan8.fvds.ru python[707654]: 2025-10-18 18:22:18,753 | INFO | support-join-guard | TTL expired: approving & restricting user_id=7335330987 chat_id=-1001413291597
+2025-10-18T18:22:19+0300 ivan8.fvds.ru python[707654]: 2025-10-18 18:22:19,029 | INFO | aiogram.event | Update id=628015043 is handled. Duration 0 ms by bot id=8453324297
+2025-10-18T18:22:19+0300 ivan8.fvds.ru python[707654]: 2025-10-18 18:22:19,303 | INFO | support-join-guard | TTL expired: approving & restricting user_id=8307519429 chat_id=-1001413291597
+2025-10-18T18:22:19+0300 ivan8.fvds.ru python[707654]: 2025-10-18 18:22:19,408 | INFO | aiogram.event | Update id=628015044 is handled. Duration 0 ms by bot id=8453324297
+2025-10-18T18:22:33+0300 ivan8.fvds.ru systemd[1]: Stopping Telegram bot instance support...
+2025-10-18T18:22:33+0300 ivan8.fvds.ru python[707654]: 2025-10-18 18:22:33,597 | WARNING | aiogram.dispatcher | Received SIGTERM signal
+2025-10-18T18:22:33+0300 ivan8.fvds.ru python[707654]: 2025-10-18 18:22:33,598 | INFO | aiogram.dispatcher | Polling stopped for bot @iamadminhere_bot id=8453324297 - 'support'
+2025-10-18T18:22:33+0300 ivan8.fvds.ru python[707654]: 2025-10-18 18:22:33,598 | INFO | aiogram.dispatcher | Polling stopped
+2025-10-18T18:22:33+0300 ivan8.fvds.ru python[707654]: 2025-10-18 18:22:33,852 | INFO | support-join-guard | PROBE: enabled
+2025-10-18T18:22:34+0300 ivan8.fvds.ru systemd[1]: tgbot@support.service: Deactivated successfully.
+2025-10-18T18:22:34+0300 ivan8.fvds.ru systemd[1]: Stopped Telegram bot instance support.
+2025-10-18T18:22:34+0300 ivan8.fvds.ru systemd[1]: tgbot@support.service: Consumed 3.855s CPU time.
+2025-10-18T18:22:34+0300 ivan8.fvds.ru systemd[1]: Started Telegram bot instance support.
+2025-10-18T18:22:45+0300 ivan8.fvds.ru python[707854]: 2025-10-18 18:22:45,345 | INFO | support-join-guard | BOOT: app.py loaded file=/opt/tgbots/bots/support/app.py SQLITE_PATH=/opt/tgbots/bots/support/join_guard_state.db WINDOW=86400
+2025-10-18T18:22:45+0300 ivan8.fvds.ru python[707854]: 2025-10-18 18:22:45,345 | INFO | support-join-guard | Allowlist enabled for chat_ids=[-1002099408662, -1001878435829, -1001472589350, -1001437148632, -1001413291597, -1001404423510, -1001355629107, -1001329487433, -1001276110445, -1001274723644, -1001210525113, -1001209607608]
+2025-10-18T18:22:45+0300 ivan8.fvds.ru python[707854]: 2025-10-18 18:22:45,770 | INFO | support-join-guard | Bot username: @iamadminhere_bot (support, sys-clean=False, botlock=True, diag=True)
+2025-10-18T18:22:45+0300 ivan8.fvds.ru python[707854]: 2025-10-18 18:22:45,770 | INFO | support-join-guard | ENV: SQLITE_PATH=/opt/tgbots/bots/support/join_guard_state.db DELETE_SYSTEM_MESSAGES=True LOCKDOWN_NONADMIN_BOTS=True AGGRESSIVE_CHANNEL_ANTILINK=True ALLOWLIST=[-1002099408662, -1001878435829, -1001472589350, -1001437148632, -1001413291597, -1001404423510, -1001355629107, -1001329487433, -1001276110445, -1001274723644, -1001210525113, -1001209607608] TEST_CHAT_ID=-1002099408662 TRACE_TEST_CHAT=True
+2025-10-18T18:22:45+0300 ivan8.fvds.ru python[707854]: 2025-10-18 18:22:45,771 | INFO | aiogram.dispatcher | Start polling
+2025-10-18T18:22:45+0300 ivan8.fvds.ru python[707854]: 2025-10-18 18:22:45,815 | INFO | aiogram.dispatcher | Run polling for bot @iamadminhere_bot id=8453324297 - 'support'
+2025-10-18T18:22:50+0300 ivan8.fvds.ru python[707854]: 2025-10-18 18:22:50,777 | INFO | support-join-guard | Expirer loop started: interval=20s ttl=600s
+2025-10-18T18:23:01+0300 ivan8.fvds.ru python[707854]: 2025-10-18 18:23:01,824 | INFO | aiogram.event | Update id=628015045 is handled. Duration 1 ms by bot id=8453324297
+2025-10-18T18:24:42+0300 ivan8.fvds.ru systemd[1]: /etc/systemd/system/tgbot@.service:37: Unknown key name 'ExecStopPost' in section 'Install', ignoring.
+2025-10-18T18:24:42+0300 ivan8.fvds.ru systemd[1]: Stopping Telegram bot instance support...
+2025-10-18T18:24:42+0300 ivan8.fvds.ru python[707854]: 2025-10-18 18:24:42,224 | WARNING | aiogram.dispatcher | Received SIGTERM signal
+2025-10-18T18:24:42+0300 ivan8.fvds.ru python[707854]: 2025-10-18 18:24:42,225 | INFO | aiogram.dispatcher | Polling stopped for bot @iamadminhere_bot id=8453324297 - 'support'
+2025-10-18T18:24:42+0300 ivan8.fvds.ru python[707854]: 2025-10-18 18:24:42,225 | INFO | aiogram.dispatcher | Polling stopped
+2025-10-18T18:24:42+0300 ivan8.fvds.ru python[707854]: 2025-10-18 18:24:42,478 | INFO | support-join-guard | PROBE: enabled
+2025-10-18T18:24:43+0300 ivan8.fvds.ru systemd[1]: tgbot@support.service: Deactivated successfully.
+2025-10-18T18:24:43+0300 ivan8.fvds.ru systemd[1]: Stopped Telegram bot instance support.
+2025-10-18T18:24:43+0300 ivan8.fvds.ru systemd[1]: tgbot@support.service: Consumed 3.721s CPU time.
+2025-10-18T18:24:46+0300 ivan8.fvds.ru systemd[1]: /etc/systemd/system/tgbot@.service:37: Unknown key name 'ExecStopPost' in section 'Install', ignoring.
+2025-10-18T18:34:18+0300 ivan8.fvds.ru systemd[1]: /etc/systemd/system/tgbot@.service:37: Unknown key name 'ExecStopPost' in section 'Install', ignoring.
+2025-10-18T18:42:51+0300 ivan8.fvds.ru systemd[1]: Started Telegram bot instance support.
+2025-10-18T18:43:01+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:01,840 | INFO | support-join-guard | BOOT: app.py loaded file=/opt/tgbots/bots/support/app.py SQLITE_PATH=/opt/tgbots/bots/support/join_guard_state.db WINDOW=86400
+2025-10-18T18:43:01+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:01,841 | INFO | support-join-guard | Allowlist enabled for chat_ids=[-1002099408662, -1001878435829, -1001472589350, -1001437148632, -1001413291597, -1001404423510, -1001355629107, -1001329487433, -1001276110445, -1001274723644, -1001210525113, -1001209607608]
+2025-10-18T18:43:02+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:02,263 | INFO | support-join-guard | Bot username: @iamadminhere_bot (support, sys-clean=False, botlock=True, diag=True)
+2025-10-18T18:43:02+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:02,263 | INFO | support-join-guard | ENV: SQLITE_PATH=/opt/tgbots/bots/support/join_guard_state.db DELETE_SYSTEM_MESSAGES=True LOCKDOWN_NONADMIN_BOTS=True AGGRESSIVE_CHANNEL_ANTILINK=True ALLOWLIST=[-1002099408662, -1001878435829, -1001472589350, -1001437148632, -1001413291597, -1001404423510, -1001355629107, -1001329487433, -1001276110445, -1001274723644, -1001210525113, -1001209607608] TEST_CHAT_ID=-1002099408662 TRACE_TEST_CHAT=True
+2025-10-18T18:43:02+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:02,263 | INFO | aiogram.dispatcher | Start polling
+2025-10-18T18:43:02+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:02,309 | INFO | aiogram.dispatcher | Run polling for bot @iamadminhere_bot id=8453324297 - 'support'
+2025-10-18T18:43:02+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:02,406 | INFO | aiogram.event | Update id=628015046 is handled. Duration 0 ms by bot id=8453324297
+2025-10-18T18:43:02+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:02,424 | INFO | aiogram.event | Update id=628015047 is handled. Duration 17 ms by bot id=8453324297
+2025-10-18T18:43:02+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:02,424 | INFO | aiogram.event | Update id=628015048 is handled. Duration 17 ms by bot id=8453324297
+2025-10-18T18:43:02+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:02,424 | INFO | aiogram.event | Update id=628015049 is handled. Duration 16 ms by bot id=8453324297
+2025-10-18T18:43:02+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:02,424 | INFO | aiogram.event | Update id=628015050 is handled. Duration 16 ms by bot id=8453324297
+2025-10-18T18:43:02+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:02,424 | INFO | aiogram.event | Update id=628015051 is handled. Duration 16 ms by bot id=8453324297
+2025-10-18T18:43:02+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:02,424 | INFO | aiogram.event | Update id=628015052 is handled. Duration 15 ms by bot id=8453324297
+2025-10-18T18:43:02+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:02,424 | INFO | aiogram.event | Update id=628015053 is handled. Duration 15 ms by bot id=8453324297
+2025-10-18T18:43:02+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:02,424 | INFO | aiogram.event | Update id=628015054 is handled. Duration 15 ms by bot id=8453324297
+2025-10-18T18:43:02+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:02,424 | INFO | aiogram.event | Update id=628015055 is handled. Duration 15 ms by bot id=8453324297
+2025-10-18T18:43:02+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:02,425 | INFO | aiogram.event | Update id=628015056 is handled. Duration 14 ms by bot id=8453324297
+2025-10-18T18:43:02+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:02,425 | INFO | aiogram.event | Update id=628015057 is handled. Duration 14 ms by bot id=8453324297
+2025-10-18T18:43:02+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:02,425 | INFO | aiogram.event | Update id=628015058 is handled. Duration 14 ms by bot id=8453324297
+2025-10-18T18:43:02+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:02,425 | INFO | aiogram.event | Update id=628015059 is handled. Duration 14 ms by bot id=8453324297
+2025-10-18T18:43:02+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:02,425 | INFO | aiogram.event | Update id=628015060 is handled. Duration 14 ms by bot id=8453324297
+2025-10-18T18:43:02+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:02,729 | INFO | aiogram.event | Update id=628015061 is handled. Duration 317 ms by bot id=8453324297
+2025-10-18T18:43:02+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:02,739 | INFO | aiogram.event | Update id=628015062 is handled. Duration 319 ms by bot id=8453324297
+2025-10-18T18:43:07+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:07,269 | INFO | support-join-guard | Expirer loop started: interval=20s ttl=600s
+2025-10-18T18:43:07+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:07,271 | INFO | support-join-guard | TTL expired: approving & restricting user_id=8328153994 chat_id=-1001413291597
+2025-10-18T18:43:07+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:07,370 | INFO | aiogram.event | Update id=628015063 is handled. Duration 0 ms by bot id=8453324297
+2025-10-18T18:43:07+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:07,592 | INFO | support-join-guard | TTL expired: approving & restricting user_id=8150057221 chat_id=-1001413291597
+2025-10-18T18:43:07+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:07,684 | INFO | aiogram.event | Update id=628015064 is handled. Duration 0 ms by bot id=8453324297
+2025-10-18T18:43:07+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:07,923 | INFO | support-join-guard | TTL expired: approving & restricting user_id=8448945758 chat_id=-1001413291597
+2025-10-18T18:43:08+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:08,015 | INFO | aiogram.event | Update id=628015065 is handled. Duration 0 ms by bot id=8453324297
+2025-10-18T18:43:08+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:08,217 | INFO | support-join-guard | TTL expired: approving & restricting user_id=8000350503 chat_id=-1001413291597
+2025-10-18T18:43:08+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:08,301 | INFO | aiogram.event | Update id=628015066 is handled. Duration 0 ms by bot id=8453324297
+2025-10-18T18:43:08+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:08,514 | INFO | support-join-guard | TTL expired: approving & restricting user_id=7528783913 chat_id=-1001472589350
+2025-10-18T18:43:08+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:08,603 | INFO | aiogram.event | Update id=628015067 is handled. Duration 0 ms by bot id=8453324297
+2025-10-18T18:43:08+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:08,842 | INFO | support-join-guard | TTL expired: approving & restricting user_id=7644544670 chat_id=-1001472589350
+2025-10-18T18:43:08+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:08,989 | INFO | aiogram.event | Update id=628015068 is handled. Duration 0 ms by bot id=8453324297
+2025-10-18T18:43:09+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:09,259 | INFO | support-join-guard | TTL expired: approving & restricting user_id=8435825808 chat_id=-1001413291597
+2025-10-18T18:43:09+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:43:09,425 | INFO | aiogram.event | Update id=628015069 is handled. Duration 0 ms by bot id=8453324297
+2025-10-18T18:45:30+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:45:30,136 | WARNING | aiogram.dispatcher | Received SIGTERM signal
+2025-10-18T18:45:30+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:45:30,137 | INFO | aiogram.dispatcher | Polling stopped for bot @iamadminhere_bot id=8453324297 - 'support'
+2025-10-18T18:45:30+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:45:30,137 | INFO | aiogram.dispatcher | Polling stopped
+2025-10-18T18:45:30+0300 ivan8.fvds.ru python[714491]: 2025-10-18 18:45:30,392 | INFO | support-join-guard | PROBE: enabled
+2025-10-18T18:45:32+0300 ivan8.fvds.ru systemd[1]: tgbot@support.service: Deactivated successfully.
+2025-10-18T18:45:32+0300 ivan8.fvds.ru systemd[1]: tgbot@support.service: Consumed 3.868s CPU time.
+2025-10-18T18:45:35+0300 ivan8.fvds.ru systemd[1]: tgbot@support.service: Scheduled restart job, restart counter is at 1.
+2025-10-18T18:45:35+0300 ivan8.fvds.ru systemd[1]: Stopped Telegram bot instance support.
+2025-10-18T18:45:35+0300 ivan8.fvds.ru systemd[1]: tgbot@support.service: Consumed 3.868s CPU time.
+2025-10-18T18:45:35+0300 ivan8.fvds.ru systemd[1]: Started Telegram bot instance support.
+2025-10-18T18:45:45+0300 ivan8.fvds.ru python[715189]: 2025-10-18 18:45:45,625 | INFO | support-join-guard | BOOT: app.py loaded file=/opt/tgbots/bots/support/app.py SQLITE_PATH=/opt/tgbots/bots/support/join_guard_state.db WINDOW=86400
+2025-10-18T18:45:45+0300 ivan8.fvds.ru python[715189]: 2025-10-18 18:45:45,625 | INFO | support-join-guard | Allowlist enabled for chat_ids=[-1002099408662, -1001878435829, -1001472589350, -1001437148632, -1001413291597, -1001404423510, -1001355629107, -1001329487433, -1001276110445, -1001274723644, -1001210525113, -1001209607608]
+2025-10-18T18:45:45+0300 ivan8.fvds.ru python[715189]: 2025-10-18 18:45:45,965 | INFO | support-join-guard | Bot username: @iamadminhere_bot (support, sys-clean=False, botlock=True, diag=True)
+2025-10-18T18:45:45+0300 ivan8.fvds.ru python[715189]: 2025-10-18 18:45:45,965 | INFO | support-join-guard | ENV: SQLITE_PATH=/opt/tgbots/bots/support/join_guard_state.db DELETE_SYSTEM_MESSAGES=True LOCKDOWN_NONADMIN_BOTS=True AGGRESSIVE_CHANNEL_ANTILINK=True ALLOWLIST=[-1002099408662, -1001878435829, -1001472589350, -1001437148632, -1001413291597, -1001404423510, -1001355629107, -1001329487433, -1001276110445, -1001274723644, -1001210525113, -1001209607608] TEST_CHAT_ID=-1002099408662 TRACE_TEST_CHAT=True
+2025-10-18T18:45:45+0300 ivan8.fvds.ru python[715189]: 2025-10-18 18:45:45,965 | INFO | aiogram.dispatcher | Start polling
+2025-10-18T18:45:46+0300 ivan8.fvds.ru python[715189]: 2025-10-18 18:45:46,010 | INFO | aiogram.dispatcher | Run polling for bot @iamadminhere_bot id=8453324297 - 'support'
+2025-10-18T18:45:50+0300 ivan8.fvds.ru python[715189]: 2025-10-18 18:45:50,971 | INFO | support-join-guard | Expirer loop started: interval=20s ttl=600s
+2025-10-18T18:46:22+0300 ivan8.fvds.ru python[715189]: 2025-10-18 18:46:22,915 | INFO | aiogram.event | Update id=628015070 is handled. Duration 291 ms by bot id=8453324297
+2025-10-18T18:47:10+0300 ivan8.fvds.ru python[715189]: 2025-10-18 18:47:10,002 | INFO | aiogram.event | Update id=628015071 is handled. Duration 1 ms by bot id=8453324297
+2025-10-18T18:53:11+0300 ivan8.fvds.ru python[715189]: 2025-10-18 18:53:11,059 | INFO | support-join-guard | TTL expired: approving & restricting user_id=8053706698 chat_id=-1001413291597
+2025-10-18T18:53:11+0300 ivan8.fvds.ru python[715189]: 2025-10-18 18:53:11,162 | INFO | aiogram.event | Update id=628015072 is handled. Duration 0 ms by bot id=8453324297
+2025-10-18T18:53:11+0300 ivan8.fvds.ru python[715189]: 2025-10-18 18:53:11,397 | INFO | support-join-guard | TTL expired: approving & restricting user_id=7909281237 chat_id=-1001413291597
+2025-10-18T18:53:11+0300 ivan8.fvds.ru python[715189]: 2025-10-18 18:53:11,507 | INFO | aiogram.event | Update id=628015073 is handled. Duration 0 ms by bot id=8453324297
+2025-10-18T18:56:31+0300 ivan8.fvds.ru python[715189]: 2025-10-18 18:56:31,780 | INFO | support-join-guard | TTL expired: approving & restricting user_id=7830960734 chat_id=-1001472589350
+2025-10-18T18:56:31+0300 ivan8.fvds.ru python[715189]: 2025-10-18 18:56:31,997 | INFO | aiogram.event | Update id=628015074 is handled. Duration 0 ms by bot id=8453324297
+2025-10-18T19:01:45+0300 ivan8.fvds.ru python[715189]: 2025-10-18 19:01:45,145 | INFO | aiogram.event | Update id=628015075 is handled. Duration 202 ms by bot id=8453324297
+2025-10-18T19:04:59+0300 ivan8.fvds.ru python[715189]: 2025-10-18 19:04:59,553 | INFO | aiogram.event | Update id=628015076 is handled. Duration 0 ms by bot id=8453324297
+
+================================================================================
+LAST LOGS (filtered: hg1|hg2|approve|ERROR|Traceback)
+================================================================================
+2025-10-18T18:11:32+0300 ivan8.fvds.ru python[704504]: Traceback (most recent call last):
+2025-10-18T18:11:48+0300 ivan8.fvds.ru python[704548]: Traceback (most recent call last):
+2025-10-18T18:12:03+0300 ivan8.fvds.ru python[704595]: Traceback (most recent call last):
+2025-10-18T18:12:18+0300 ivan8.fvds.ru python[704699]: Traceback (most recent call last):
+2025-10-18T18:12:33+0300 ivan8.fvds.ru python[704737]: Traceback (most recent call last):
+2025-10-18T18:12:48+0300 ivan8.fvds.ru python[704776]: Traceback (most recent call last):
+2025-10-18T18:13:03+0300 ivan8.fvds.ru python[704818]: Traceback (most recent call last):
+2025-10-18T18:13:18+0300 ivan8.fvds.ru python[704913]: Traceback (most recent call last):
+2025-10-18T18:13:34+0300 ivan8.fvds.ru python[704986]: Traceback (most recent call last):
+2025-10-18T18:13:49+0300 ivan8.fvds.ru python[705061]: Traceback (most recent call last):
+2025-10-18T18:14:05+0300 ivan8.fvds.ru python[705115]: Traceback (most recent call last):
+2025-10-18T18:14:21+0300 ivan8.fvds.ru python[705321]: Traceback (most recent call last):
+2025-10-18T18:14:36+0300 ivan8.fvds.ru python[705379]: Traceback (most recent call last):
+2025-10-18T18:14:51+0300 ivan8.fvds.ru python[705462]: Traceback (most recent call last):
+2025-10-18T18:15:07+0300 ivan8.fvds.ru python[705583]: Traceback (most recent call last):
+2025-10-18T18:15:23+0300 ivan8.fvds.ru python[705703]: Traceback (most recent call last):
+2025-10-18T18:15:39+0300 ivan8.fvds.ru python[705748]: Traceback (most recent call last):
+2025-10-18T18:15:54+0300 ivan8.fvds.ru python[705792]: Traceback (most recent call last):
+2025-10-18T18:16:10+0300 ivan8.fvds.ru python[705834]: Traceback (most recent call last):
+2025-10-18T18:16:25+0300 ivan8.fvds.ru python[705930]: Traceback (most recent call last):
+2025-10-18T18:16:41+0300 ivan8.fvds.ru python[705972]: Traceback (most recent call last):
+2025-10-18T18:16:55+0300 ivan8.fvds.ru python[706015]: Traceback (most recent call last):
+2025-10-18T18:17:09+0300 ivan8.fvds.ru python[706054]: Traceback (most recent call last):
+2025-10-18T18:17:24+0300 ivan8.fvds.ru python[706183]: Traceback (most recent call last):
+2025-10-18T18:17:39+0300 ivan8.fvds.ru python[706233]: Traceback (most recent call last):
+2025-10-18T18:17:55+0300 ivan8.fvds.ru python[706353]: Traceback (most recent call last):
+2025-10-18T18:18:10+0300 ivan8.fvds.ru python[706405]: Traceback (most recent call last):
+2025-10-18T18:18:31+0300 ivan8.fvds.ru python[706555]: Traceback (most recent call last):
+2025-10-18T18:18:45+0300 ivan8.fvds.ru python[706607]: Traceback (most recent call last):
+2025-10-18T18:19:01+0300 ivan8.fvds.ru python[706658]: Traceback (most recent call last):
+2025-10-18T18:19:17+0300 ivan8.fvds.ru python[706759]: Traceback (most recent call last):
+2025-10-18T18:19:31+0300 ivan8.fvds.ru python[706804]: Traceback (most recent call last):
+2025-10-18T18:19:46+0300 ivan8.fvds.ru python[706951]: Traceback (most recent call last):
+2025-10-18T18:20:01+0300 ivan8.fvds.ru python[706999]: Traceback (most recent call last):
+2025-10-18T18:20:18+0300 ivan8.fvds.ru python[707110]: Traceback (most recent call last):
+2025-10-18T18:20:33+0300 ivan8.fvds.ru python[707164]: Traceback (most recent call last):
+2025-10-18T18:20:49+0300 ivan8.fvds.ru python[707240]: Traceback (most recent call last):
+2025-10-18T18:21:05+0300 ivan8.fvds.ru python[707283]: Traceback (most recent call last):
+2025-10-18T18:21:20+0300 ivan8.fvds.ru python[707389]: Traceback (most recent call last):
+2025-10-18T18:21:35+0300 ivan8.fvds.ru python[707435]: Traceback (most recent call last):
+2025-10-18T18:21:50+0300 ivan8.fvds.ru python[707572]: Traceback (most recent call last):
+
+================================================================================
+DONE
+================================================================================
+Диагностический отчёт сохранён в: /opt/tgbots/bots/support/diag-20251018-160932Z.txt

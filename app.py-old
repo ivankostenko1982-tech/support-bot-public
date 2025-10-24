@@ -1,0 +1,739 @@
+#!/usr/bin/env python3
+# app.py — "support" bot (aiogram v3)
+#
+# Features:
+#   • Join-guard: DM button "Я человек" with HMAC-signed callback (anti-replay). Short callback_data: v:<chat_id>:<ts>:<sig16>
+#   • Auto-approve on TTL expiry + permanent restrict (forever mute) + DM with clickable group title and admin mention
+#   • Newcomer anti-links for 24h after approval: deletes any URLs, t.me, www.*, and @mentions (admins excluded)
+#   • System service messages cleaner: /sysclean on|off (admin-only), persisted in SQLite; silent for non-admins
+#   • Allowlist by TARGET_CHAT_ID(S); admin-only commands /health, /allowlist, /sysclean
+#   • OPTIONAL: Lock down ANY non-admin bot forever (restrict all permissions), controlled by LOCKDOWN_NONADMIN_BOTS env and /botlock on|off (persisted)
+#   • Link previews are disabled in all DMs with URLs
+#
+# Requirements:
+#   Python 3.10+, aiogram v3.*
+#   ENV (in /etc/tgbots/support.env):
+#     BOT_TOKEN=...
+#     VERIFY_SECRET=...               # random long secret for HMAC
+#     TARGET_CHAT_ID=-100..., -100... # optional, comma or space separated
+#     JOIN_REQUEST_TTL=600            # optional
+#     DELETE_SYSTEM_MESSAGES=true     # optional default for sysclean
+#     EXPIRE_SWEEP_INTERVAL=20        # optional
+#     ADMIN_CONTACT_OVERRIDE=username # optional, public admin @username for DM text
+#     ADMIN_IDS=123,456               # optional, extra admin user_ids (comma/space separated)
+#     SQLITE_PATH=/var/lib/tgbots/support.db  # optional
+#     LOCKDOWN_NONADMIN_BOTS=true     # optional default (can be toggled by /botlock)
+#
+from __future__ import annotations
+
+import os, time, sqlite3, asyncio, logging, html, hmac, hashlib, re
+from dataclasses import dataclass
+from contextlib import closing
+from typing import Optional, List, Tuple, Set
+from datetime import datetime, timedelta
+
+from aiogram import Bot, Dispatcher, F, Router
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode, ChatType
+from aiogram.filters import CommandStart, Command
+from aiogram.types import (
+    ChatJoinRequest, Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
+    ChatMemberAdministrator, ChatMemberOwner, ChatMember, ChatPermissions,
+)
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+# ── Logging ─────────────────────────────────────────────────────────────────────
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+log = logging.getLogger("support-join-guard")
+
+# ── ENV ─────────────────────────────────────────────────────────────────────────
+BOT_TOKEN = (os.getenv("BOT_TOKEN") or "").strip()
+VERIFY_SECRET = (os.getenv("VERIFY_SECRET") or "").strip()
+if not BOT_TOKEN:
+    raise SystemExit("BOT_TOKEN is required in /etc/tgbots/support.env")
+if not VERIFY_SECRET:
+    raise SystemExit("VERIFY_SECRET is required in /etc/tgbots/support.env")
+
+JOIN_REQUEST_TTL = int(os.getenv("JOIN_REQUEST_TTL", "600"))
+SQLITE_PATH = os.getenv("SQLITE_PATH", "./join_guard_state.db")
+ENV_DELETE_SYSTEM_MESSAGES = os.getenv("DELETE_SYSTEM_MESSAGES", "false").lower() in {"1","true","yes","on"}
+EXPIRE_SWEEP_INTERVAL = int(os.getenv("EXPIRE_SWEEP_INTERVAL", "20"))
+ADMIN_CONTACT_OVERRIDE = (os.getenv("ADMIN_CONTACT_OVERRIDE") or "").strip().lstrip("@")
+NEWCOMER_WINDOW_SECONDS = 24 * 60 * 60
+ENV_LOCKDOWN_NONADMIN_BOTS = os.getenv("LOCKDOWN_NONADMIN_BOTS", "true").lower() in {"1","true","yes","on"}
+
+def _parse_id_list(raw: str) -> Set[int]:
+    ids: Set[int] = set()
+    if not raw or not raw.strip():
+        return ids
+    parts = [p for chunk in raw.replace(",", " ").split() for p in [chunk]]
+    for p in parts:
+        if "=" in p:
+            log.warning("Ignoring non-id token in list: %r", p)
+            continue
+        try:
+            ids.add(int(p))
+        except ValueError:
+            log.warning("Skipping malformed ID: %r", p)
+    return ids
+
+ALLOWLIST = _parse_id_list(os.getenv("TARGET_CHAT_IDS", "")) | _parse_id_list(os.getenv("TARGET_CHAT_ID", ""))
+if ALLOWLIST:
+    log.info("Allowlist enabled for chat_ids=%s", sorted(ALLOWLIST))
+else:
+    log.info("Allowlist is empty — bot will accept join requests from ANY chat")
+
+ADMIN_IDS = _parse_id_list(os.getenv("ADMIN_IDS", ""))
+if ADMIN_IDS:
+    log.info("Static admin ids set: %s", sorted(ADMIN_IDS))
+
+# ── Bot/Dispatcher/Router ───────────────────────────────────────────────────────
+bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+dp = Dispatcher()
+router = Router()
+dp.include_router(router)
+
+# ── App State ───────────────────────────────────────────────────────────────────
+@dataclass
+class AppState:
+    sys_clean_enabled: bool = False
+    me_id: Optional[int] = None
+    botlock_enabled: bool = True
+
+state = AppState()
+
+# ── SQLite ──────────────────────────────────────────────────────────────────────
+db_dir = os.path.dirname(SQLITE_PATH) or "."
+os.makedirs(db_dir, exist_ok=True)
+
+def init_db() -> None:
+    with closing(sqlite3.connect(SQLITE_PATH)) as conn:
+        cur = conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL;")
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pending_requests (
+                user_id      INTEGER NOT NULL,
+                chat_id      INTEGER NOT NULL,
+                chat_title   TEXT,
+                requested_at INTEGER NOT NULL,
+                PRIMARY KEY (user_id, chat_id)
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS approvals (
+                user_id     INTEGER NOT NULL,
+                chat_id     INTEGER NOT NULL,
+                approved_at INTEGER NOT NULL,
+                PRIMARY KEY (user_id, chat_id)
+            )
+            """
+        )
+        conn.commit()
+
+def db_get_setting(key: str) -> Optional[str]:
+    with closing(sqlite3.connect(SQLITE_PATH)) as conn:
+        cur = conn.execute("SELECT value FROM settings WHERE key=?", (key,))
+        row = cur.fetchone()
+        return row[0] if row else None
+
+def db_set_setting(key: str, value: str) -> None:
+    with closing(sqlite3.connect(SQLITE_PATH)) as conn:
+        conn.execute(
+            "INSERT INTO settings(key,value) VALUES(?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, value),
+        )
+        conn.commit()
+
+def set_pending(user_id: int, chat_id: int, chat_title: str) -> None:
+    with closing(sqlite3.connect(SQLITE_PATH)) as conn:
+        conn.execute(
+            """
+            INSERT INTO pending_requests(user_id, chat_id, chat_title, requested_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id, chat_id) DO UPDATE SET
+                chat_title=excluded.chat_title,
+                requested_at=excluded.requested_at
+            """,
+            (user_id, chat_id, chat_title, int(time.time())),
+        )
+        conn.commit()
+
+def clear_pending(user_id: int, chat_id: int) -> None:
+    with closing(sqlite3.connect(SQLITE_PATH)) as conn:
+        conn.execute("DELETE FROM pending_requests WHERE user_id=? AND chat_id=?", (user_id, chat_id))
+        conn.commit()
+
+def record_approval(user_id: int, chat_id: int) -> None:
+    with closing(sqlite3.connect(SQLITE_PATH)) as conn:
+        conn.execute(
+            """
+            INSERT INTO approvals(user_id, chat_id, approved_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id, chat_id) DO UPDATE SET
+                approved_at=excluded.approved_at
+            """,
+            (user_id, chat_id, int(time.time())),
+        )
+        conn.commit()
+
+def newcomer_until(user_id: int, chat_id: int) -> Optional[int]:
+    with closing(sqlite3.connect(SQLITE_PATH)) as conn:
+        cur = conn.execute("SELECT approved_at FROM approvals WHERE user_id=? AND chat_id=?", (user_id, chat_id))
+        row = cur.fetchone()
+        if not row:
+            return None
+        return row[0] + NEWCOMER_WINDOW_SECONDS
+
+def is_newcomer(user_id: int, chat_id: int) -> bool:
+    until = newcomer_until(user_id, chat_id)
+    return bool(until and until > int(time.time()))
+
+# ── Admin checks ────────────────────────────────────────────────────────────────
+async def is_user_admin(user_id: Optional[int], chat_id_context: Optional[int] = None) -> bool:
+    if user_id is None:
+        return False
+    if user_id in ADMIN_IDS:
+        return True
+    if chat_id_context is not None:
+        try:
+            cm = await bot.get_chat_member(chat_id_context, user_id)
+            if isinstance(cm, (ChatMemberAdministrator, ChatMemberOwner)):
+                return True
+        except Exception:
+            pass
+    if ALLOWLIST:
+        for aid in ALLOWLIST:
+            try:
+                cm = await bot.get_chat_member(aid, user_id)
+                if isinstance(cm, (ChatMemberAdministrator, ChatMemberOwner)):
+                    return True
+            except Exception:
+                continue
+    return not (ADMIN_IDS or ALLOWLIST)
+
+async def ensure_admin(m: Message) -> bool:
+    chat_id_ctx = m.chat.id if m.chat else None
+    user_id = m.from_user.id if m.from_user else None
+    sender_chat_id = m.sender_chat.id if m.sender_chat else None
+    if sender_chat_id and chat_id_ctx and sender_chat_id == chat_id_ctx:
+        return True
+    return await is_user_admin(user_id, chat_id_ctx)
+
+# ── Signing helpers (short) ────────────────────────────────────────────────────
+def _sig16(payload: str) -> str:
+    mac = hmac.new(VERIFY_SECRET.encode('utf-8'), payload.encode('utf-8'), digestmod='sha256').digest()
+    return mac[:8].hex()  # 16 hex chars
+
+def build_verify_cbdata(chat_id: int, user_id: int) -> str:
+    ts = int(time.time())
+    core = f"{chat_id}:{user_id}:{ts}"
+    sig = _sig16(core)
+    return f"v:{chat_id}:{ts}:{sig}"
+
+def parse_and_verify_cbdata(cbdata: str, actual_user_id: int) -> tuple[bool, Optional[int], Optional[str]]:
+    # v:<chat_id>:<ts>:<sig16>
+    if not cbdata.startswith("v:"):
+        return (False, None, "Некорректные данные")
+    try:
+        _, chat_id_s, ts_s, sig = cbdata.split(":", 3)
+        chat_id = int(chat_id_s); ts = int(ts_s)
+    except Exception:
+        return (False, None, "Некорректные данные")
+    if int(time.time()) - ts > JOIN_REQUEST_TTL + 30:
+        return (False, None, "Время действия истекло")
+    core = f"{chat_id}:{actual_user_id}:{ts}"
+    if _sig16(core) != sig:
+        return (False, None, "Подпись не сходится")
+    return (True, chat_id, None)
+
+# ── UI helpers ──────────────────────────────────────────────────────────────────
+def verify_keyboard(chat_id: int, user_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Я человек (подтвердить)", callback_data=build_verify_cbdata(chat_id, user_id))
+    kb.button(text="🔄 Обновить", callback_data="refresh")
+    return kb.as_markup()
+
+def requests_keyboard(user_id: int, requests: List[Tuple[int, str, int]]) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for chat_id, chat_title, _ in requests:
+        label = f"Подтвердить вступление в «{chat_title or chat_id}»"
+        kb.button(text=label, callback_data=build_verify_cbdata(chat_id, user_id))
+    kb.button(text="🔄 Обновить", callback_data="refresh")
+    return kb.as_markup()
+
+async def get_public_admin_mention(chat_id: int) -> Optional[str]:
+    if ADMIN_CONTACT_OVERRIDE:
+        uname = ADMIN_CONTACT_OVERRIDE
+        return f'<a href="https://t.me/{uname}">@{uname}</a>'
+    try:
+        admins: List[ChatMember] = await bot.get_chat_administrators(chat_id)
+    except Exception as e:
+        log.debug("get_chat_administrators failed for chat %s: %s", chat_id, e)
+        return None
+    for cm in admins:
+        try:
+            is_admin = isinstance(cm, (ChatMemberAdministrator, ChatMemberOwner))
+            if not is_admin:
+                continue
+            if isinstance(cm, ChatMemberAdministrator) and getattr(cm, "is_anonymous", False):
+                continue
+            user = getattr(cm, "user", None)
+            if not user or user.is_bot:
+                continue
+            uname = user.username
+            if not uname:
+                continue
+            return f'<a href="https://t.me/{uname}">@{uname}</a>'
+        except Exception:
+            continue
+    return None
+
+async def get_group_open_url(chat_id: int) -> Optional[str]:
+    try:
+        chat = await bot.get_chat(chat_id)
+        if getattr(chat, "username", None):
+            return f"https://t.me/{chat.username}"
+    except Exception as e:
+        log.debug("get_chat failed for %s: %s", chat_id, e)
+    try:
+        expire = int((datetime.utcnow() + timedelta(minutes=30)).timestamp())
+        link = await bot.create_chat_invite_link(
+            chat_id=chat_id,
+            name="auto-open",
+            expire_date=expire,
+            member_limit=1,
+            creates_join_request=False,
+        )
+        return link.invite_link
+    except Exception as e:
+        log.debug("create_chat_invite_link failed for %s: %s", chat_id, e)
+        return None
+
+def open_group_keyboard(url: str, title: Optional[str] = None) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.add(InlineKeyboardButton(text=title or "Перейти в группу", url=url))
+    return kb.as_markup()
+
+# ── Service messages cleaner ────────────────────────────────────────────────────
+service_filter = (
+    (F.chat.type == ChatType.GROUP) | (F.chat.type == ChatType.SUPERGROUP)
+) & (
+    F.new_chat_members |
+    F.left_chat_member |
+    F.new_chat_title |
+    F.new_chat_photo |
+    F.delete_chat_photo |
+    F.group_chat_created |
+    F.supergroup_chat_created |
+    F.migrate_to_chat_id |
+    F.migrate_from_chat_id |
+    F.pinned_message
+)
+
+@router.message(service_filter)
+async def delete_service_messages(m: Message):
+    if not state.sys_clean_enabled:
+        return
+    if ALLOWLIST and int(m.chat.id) not in ALLOWLIST:
+        return
+    try:
+        await bot.delete_message(chat_id=m.chat.id, message_id=m.message_id)
+    except Exception as e:
+        logging.debug("delete_message failed in chat %s mid=%s: %s", m.chat.id, m.message_id, e)
+
+# ── Bot lockdown (optional) ────────────────────────────────────────────────────
+def _zero_perms() -> ChatPermissions:
+    return ChatPermissions(
+        can_send_messages=False,
+        can_send_media_messages=False,
+        can_send_polls=False,
+        can_send_other_messages=False,
+        can_add_web_page_previews=False,
+        can_change_info=False,
+        can_invite_users=False,
+        can_pin_messages=False,
+        can_manage_topics=False,
+    )
+
+async def _restrict_bot_forever(chat_id: int, user_id: int) -> None:
+    if not state.botlock_enabled:
+        return
+    if state.me_id and user_id == state.me_id:
+        return
+    try:
+        cm = await bot.get_chat_member(chat_id, user_id)
+        if isinstance(cm, (ChatMemberAdministrator, ChatMemberOwner)):
+            return  # не трогаем админов/владельцев (включая бот-админов)
+    except Exception:
+        pass
+    try:
+        now = int(time.time())
+        forever_days = 400
+        await bot.restrict_chat_member(
+            chat_id=chat_id,
+            user_id=user_id,
+            permissions=_zero_perms(),
+            until_date=now + forever_days * 24 * 60 * 60,
+        )
+        log.info("Bot lockdown: restricted bot user_id=%s in chat_id=%s", user_id, chat_id)
+    except Exception as e:
+        log.debug("Bot lockdown failed for user_id=%s chat_id=%s: %s", user_id, chat_id, e)
+
+@router.message((F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP})) & F.new_chat_members)
+async def on_new_members_lockdown(m: Message):
+    for u in (m.new_chat_members or []):
+        if u.is_bot:
+            await _restrict_bot_forever(m.chat.id, u.id)
+
+@router.message((F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP})) & F.from_user.as_("u"))
+async def on_any_group_message_lock_bots(m: Message, u):
+    try:
+        if u and getattr(u, "is_bot", False):
+            await _restrict_bot_forever(m.chat.id, u.id)
+    except Exception:
+        pass
+
+# ── Join Request flow ───────────────────────────────────────────────────────────
+@router.chat_join_request()
+async def on_join_request(event: ChatJoinRequest):
+    if ALLOWLIST and int(event.chat.id) not in ALLOWLIST:
+        log.info("Ignoring join request for non-allowed chat_id=%s title=%s", event.chat.id, event.chat.title)
+        return
+
+    set_pending(event.from_user.id, event.chat.id, event.chat.title or "")
+
+    title = event.chat.title or "группа"
+    open_url = await get_group_open_url(event.chat.id)
+    if open_url:
+        title_html = f'<a href="{html.escape(open_url, quote=True)}">{html.escape(title)}</a>'
+    else:
+        title_html = html.escape(title)
+
+    text = (
+        f"👋 Привет! Чтобы вступить в {title_html}, пройдите короткую проверку.\n\n"
+        "Нажмите кнопку ниже — и вы будете одобрены автоматически. "
+        "Если кнопка не работает, нажмите /start ещё раз."
+    )
+
+    try:
+        await bot.send_message(
+            chat_id=event.from_user.id,
+            text=text,
+            reply_markup=verify_keyboard(chat_id=event.chat.id, user_id=event.from_user.id),
+            disable_web_page_preview=True,
+        )
+    except Exception as e:
+        log.info("DM failed (maybe user hasn't started bot yet): %s", e)
+
+# ── Start & callbacks ──────────────────────────────────────────────────────────
+@router.message(CommandStart())
+async def on_start(message: Message):
+    await expire_old_requests()
+    with closing(sqlite3.connect(SQLITE_PATH)) as conn:
+        rows = list(conn.execute(
+            "SELECT chat_id, chat_title, requested_at FROM pending_requests WHERE user_id=?",
+            (message.from_user.id,)
+        ))
+    if not rows:
+        kb = InlineKeyboardBuilder()
+        kb.button(text="🔄 Обновить", callback_data="refresh")
+        await message.answer(
+            "Привет! Пока нет активных заявок на вступление.\n"
+            "Если вы только что нажали «Вступить», подождите несколько секунд и нажмите «Обновить».",
+            reply_markup=kb.as_markup(),
+        )
+        return
+
+    if len(rows) == 1:
+        chat_id, chat_title, _ = rows[0]
+        await message.answer(
+            f"Заявка на вступление в «{html.escape(chat_title) if chat_title else chat_id}». Нажмите кнопку для подтверждения.",
+            reply_markup=verify_keyboard(chat_id=chat_id, user_id=message.from_user.id),
+        )
+    else:
+        await message.answer(
+            "Найдены несколько заявок. Выберите чат ниже:",
+            reply_markup=requests_keyboard(message.from_user.id, rows),
+        )
+
+@router.callback_query(F.data == "refresh")
+async def on_refresh(cb: CallbackQuery):
+    await expire_old_requests()
+    with closing(sqlite3.connect(SQLITE_PATH)) as conn:
+        rows = list(conn.execute(
+            "SELECT chat_id, chat_title, requested_at FROM pending_requests WHERE user_id=?",
+            (cb.from_user.id,)
+        ))
+    if not rows:
+        try:
+            await cb.message.edit_text("Заявок не найдено. Если вы только что отправили запрос, подождите и нажмите ещё раз.")
+        except Exception:
+            pass
+        await cb.answer("Обновлено")
+        return
+
+    if len(rows) == 1:
+        chat_id, chat_title, _ = rows[0]
+        await cb.message.edit_text(
+            f"Заявка на вступление в «{html.escape(chat_title) if chat_title else chat_id}». Нажмите кнопку для подтверждения.",
+            reply_markup=verify_keyboard(chat_id=chat_id, user_id=cb.from_user.id),
+        )
+        await cb.answer("Ок")
+        return
+
+    await cb.message.edit_text(
+        "Найдены несколько заявок. Выберите чат ниже:",
+        reply_markup=requests_keyboard(cb.from_user.id, rows),
+    )
+    await cb.answer("Обновлено")
+
+@router.callback_query(F.data.startswith("v:"))
+async def on_verify(cb: CallbackQuery):
+    ok, chat_id, err = parse_and_verify_cbdata(cb.data, actual_user_id=cb.from_user.id)
+    if not ok or chat_id is None:
+        await cb.answer(err or "Ошибка", show_alert=True)
+        return
+
+    if ALLOWLIST and chat_id not in ALLOWLIST:
+        await cb.answer("Эта заявка не из разрешённого чата.", show_alert=True)
+        return
+
+    with closing(sqlite3.connect(SQLITE_PATH)) as conn:
+        row = conn.execute(
+            "SELECT chat_title, requested_at FROM pending_requests WHERE user_id=? AND chat_id=?",
+            (cb.from_user.id, chat_id),
+        ).fetchone()
+
+    if not row:
+        await cb.answer("Заявка не найдена или устарела. Нажмите «Обновить».", show_alert=True)
+        return
+
+    chat_title, requested_at = row
+    chat_title_safe = html.escape(chat_title) if chat_title else str(chat_id)
+
+    if int(time.time()) - int(requested_at) > JOIN_REQUEST_TTL:
+        clear_pending(cb.from_user.id, chat_id)
+        try:
+            await bot.decline_chat_join_request(chat_id=chat_id, user_id=cb.from_user.id)
+        except Exception:
+            pass
+        await cb.answer("Заявка просрочена. Отправьте её заново.", show_alert=True)
+        return
+
+    try:
+        await bot.approve_chat_join_request(chat_id=chat_id, user_id=cb.from_user.id)
+        record_approval(cb.from_user.id, chat_id)
+        clear_pending(cb.from_user.id, chat_id)
+
+        await cb.message.edit_text(
+            f"Готово! Заявка одобрена — добро пожаловать в «{chat_title_safe}».",
+        )
+        await cb.answer("Подтверждено ✅")
+
+        url = await get_group_open_url(chat_id)
+        if url:
+            try:
+                await bot.send_message(
+                    chat_id=cb.from_user.id,
+                    text=f"Добро пожаловать! Откройте чат «{chat_title_safe}»:",
+                    reply_markup=open_group_keyboard(url, title=f"Перейти в «{chat_title_safe}»"),
+                    disable_web_page_preview=True,
+                )
+            except Exception as e:
+                log.debug("DM with open button failed: %s", e)
+
+    except Exception as e:
+        log.exception("approve_chat_join_request failed")
+        await cb.answer("Не удалось одобрить. Попробуйте позже.", show_alert=True)
+
+# ── Admin commands ──────────────────────────────────────────────────────────────
+@router.message(Command("health"))
+async def health(m: Message):
+    if not await ensure_admin(m): return
+    await m.answer("ok")
+
+@router.message(Command("allowlist"))
+async def allowlist_cmd(m: Message):
+    if not await ensure_admin(m): return
+    if ALLOWLIST:
+        await m.answer("Разрешённые chat_id:\n" + "\n".join(str(i) for i in sorted(ALLOWLIST)))
+    else:
+        await m.answer("Разрешённые chat_id не заданы (бот принимает заявки из любых чатов).")
+
+@router.message(Command("sysclean"))
+async def sysclean_cmd(m: Message):
+    if not await ensure_admin(m): return
+    parts = (m.text or "").split()
+    if len(parts) == 1:
+        origin = "override(БД)" if db_get_setting("sysclean_enabled") is not None else "env"
+        await m.answer(
+            f"Очистка системных сообщений сейчас {'включена' if state.sys_clean_enabled else 'выключена'} "
+            f"(источник: {origin}).\n"
+            f"Используй: /sysclean on  или  /sysclean off"
+        )
+        return
+    arg = parts[1].strip().lower()
+    if arg in {"on", "off"}:
+        enabled = (arg == "on")
+        db_set_setting("sysclean_enabled", "true" if enabled else "false")
+        state.sys_clean_enabled = enabled
+        await m.answer(
+            f"Готово. Очистка системных сообщений теперь "
+            f"{'включена' if enabled else 'выключена'} (сохранено, переживёт рестарт)."
+        )
+    else:
+        await m.answer("Неверный аргумент. Используй: /sysclean on  или  /sysclean off")
+
+@router.message(Command("botlock"))
+async def botlock_cmd(m: Message):
+    if not await ensure_admin(m): return
+    parts = (m.text or "").split()
+    if len(parts) == 1:
+        origin = "override(БД)" if db_get_setting("botlock_enabled") is not None else "env"
+        await m.answer(
+            f"Блокировка не-админ-ботов сейчас {'включена' if state.botlock_enabled else 'выключена'} "
+            f"(источник: {origin}).\n"
+            f"Используй: /botlock on  или  /botlock off"
+        )
+        return
+    arg = parts[1].strip().lower()
+    if arg in {"on", "off"}:
+        enabled = (arg == "on")
+        db_set_setting("botlock_enabled", "true" if enabled else "false")
+        state.botlock_enabled = enabled
+        await m.answer(
+            f"Готово. Блокировка не-админ-ботов теперь "
+            f"{'включена' if enabled else 'выключена'} (сохранено, переживёт рестарт)."
+        )
+    else:
+        await m.answer("Неверный аргумент. Используй: /botlock on  или  /botlock off")
+
+# ── TTL Expirer ────────────────────────────────────────────────────────────────
+async def expire_old_requests() -> None:
+    now = int(time.time())
+    with closing(sqlite3.connect(SQLITE_PATH)) as conn:
+        rows = list(conn.execute("SELECT user_id, chat_id, chat_title, requested_at FROM pending_requests"))
+        for user_id, chat_id, chat_title, requested_at in rows:
+            if now - requested_at <= JOIN_REQUEST_TTL:
+                continue
+            try:
+                log.info("TTL expired: approving & restricting user_id=%s chat_id=%s", user_id, chat_id)
+                await bot.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
+                record_approval(user_id, chat_id)  # mark as newcomer (for anti-links, though he is restricted)
+                perms = ChatPermissions(
+                    can_send_messages=False,
+                    can_send_media_messages=False,
+                    can_send_polls=False,
+                    can_send_other_messages=False,
+                    can_add_web_page_previews=False,
+                    can_change_info=False,
+                    can_invite_users=False,
+                    can_pin_messages=False,
+                    can_manage_topics=False,
+                )
+                forever_days = 400
+                await bot.restrict_chat_member(
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    permissions=perms,
+                    until_date=now + forever_days * 24 * 60 * 60,
+                )
+                title = chat_title or str(chat_id)
+                open_url = await get_group_open_url(chat_id)
+                if open_url:
+                    title_html = f'<a href="{html.escape(open_url, quote=True)}">{html.escape(title)}</a>'
+                else:
+                    title_html = html.escape(title)
+                admin_mention = await get_public_admin_mention(chat_id)
+                if admin_mention:
+                    txt = (
+                        f"Вы приняты в группу {title_html}, но отправка сообщений отключена навсегда.\n"
+                        f"Чтобы получить право писать, пройдите проверку у администратора {admin_mention}."
+                    )
+                else:
+                    txt = (
+                        f"Вы приняты в группу {title_html}, но отправка сообщений отключена навсегда.\n"
+                        "Чтобы получить право писать, пройдите проверку у администратора."
+                    )
+                try:
+                    await bot.send_message(chat_id=user_id, text=txt, disable_web_page_preview=True)
+                except Exception as e:
+                    log.debug("DM to user %s failed: %s", user_id, e)
+            except Exception:
+                logging.exception("approve+restrict failed for user_id=%s chat_id=%s", user_id, chat_id)
+            conn.execute("DELETE FROM pending_requests WHERE user_id=? AND chat_id=?", (user_id, chat_id))
+        conn.commit()
+
+async def expirer_loop():
+    await asyncio.sleep(5)
+    log.info("Expirer loop started: interval=%ss ttl=%ss", EXPIRE_SWEEP_INTERVAL, JOIN_REQUEST_TTL)
+    while True:
+        try:
+            await expire_old_requests()
+        except Exception:
+            log.exception("expire_old_requests() crashed")
+        await asyncio.sleep(EXPIRE_SWEEP_INTERVAL)
+
+# ── Anti-link for newcomers (24h) — including @mentions ────────────────────────
+MENTION_OR_LINK_RE = re.compile(r'(?i)(https?://\S+|t\.me/\S+|www\.\S+|@[A-Za-z0-9_]{4,})')
+
+group_msg_filter = (F.chat.type == ChatType.SUPERGROUP) | (F.chat.type == ChatType.GROUP)
+
+def _has_links_or_mentions(m: Message) -> bool:
+    txt = (m.text or m.caption or "")
+    if MENTION_OR_LINK_RE.search(txt):
+        return True
+    for ent in (m.entities or []) + (m.caption_entities or []):
+        if getattr(ent, "type", None) in ("url", "text_link", "mention"):
+            return True
+    return False
+
+@router.message(group_msg_filter)
+async def newcomer_anti_links(m: Message):
+    if await is_user_admin(m.from_user.id if m.from_user else None, m.chat.id):
+        return
+    if m.from_user and is_newcomer(m.from_user.id, m.chat.id):
+        if _has_links_or_mentions(m):
+            try:
+                await bot.delete_message(m.chat.id, m.message_id)
+                log.debug("Deleted link/mention from newcomer user_id=%s chat_id=%s", m.from_user.id, m.chat.id)
+            except Exception as e:
+                log.debug("Failed to delete newcomer link message: %s", e)
+
+# ── Entry point ─────────────────────────────────────────────────────────────────
+async def main():
+    init_db()
+    # load toggles
+    val = db_get_setting("sysclean_enabled")
+    state.sys_clean_enabled = (val.lower() == "true") if val is not None else ENV_DELETE_SYSTEM_MESSAGES
+    val2 = db_get_setting("botlock_enabled")
+    state.botlock_enabled = (val2.lower() == "true") if val2 is not None else ENV_LOCKDOWN_NONADMIN_BOTS
+
+    me = await bot.get_me()
+    state.me_id = me.id
+    log.info("Bot username: @%s (support, sys-clean=%s, botlock=%s)",
+             me.username, state.sys_clean_enabled, state.botlock_enabled)
+
+    asyncio.create_task(expirer_loop())
+    await dp.start_polling(
+        bot,
+        allowed_updates=["message", "chat_join_request", "callback_query"],
+    )
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        pass

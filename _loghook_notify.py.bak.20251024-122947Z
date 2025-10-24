@@ -1,0 +1,158 @@
+# -*- coding: utf-8 -*-
+"""
+_loghook_notify.py — обработчик логов "TESTPURGE: deleted ..." с отправкой ЛС админу
+Формат DM (русский):
+  Сообщение новичка {user_name} удалено
+  чат: {chat_title or @username(кликабельно)}
+  сообщение: {msg or [фото]/[медиа]/[нет текста]}
+  новичок до: {dd.mm.yy HH:MM}
+"""
+from __future__ import annotations
+import os, re, html, json, time, logging, urllib.request
+
+log = logging.getLogger("support-join-guard")
+
+# Парсим строку deleted с msg=...
+# Пример: TESTPURGE: deleted chat=-100... uid=... mid=... msg=... now=... until=...
+_DELETED_RE = re.compile(
+    r"TESTPURGE:\s+deleted\s+chat=(?P<chat>-?\d+)\s+uid=(?P<uid>\d+)\s+mid=(?P<mid>\d+)\s+msg=(?P<msg>.*)\s+now=(?P<now>\d+)\s+until=(?P<until>\d+)"
+)
+
+def _tg_call(token: str, method: str, params: dict) -> dict:
+    data = json.dumps(params, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{token}/{method}",
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+def _get_chat_title_and_link(token: str, chat_id: int) -> tuple[str, str|None]:
+    try:
+        info = _tg_call(token, "getChat", {"chat_id": chat_id})
+        if not info.get("ok"):
+            return (str(chat_id), None)
+        chat = info["result"]
+        title = chat.get("title") or chat.get("first_name") or chat.get("username") or str(chat_id)
+        username = chat.get("username")
+        if username:
+            return (title, f"https://t.me/{username}")
+        return (title, None)
+    except Exception:
+        return (str(chat_id), None)
+
+def _get_user_name(token: str, chat_id: int, user_id: int) -> str:
+    # Пытаемся получить имя участника через getChatMember
+    try:
+        cm = _tg_call(token, "getChatMember", {"chat_id": chat_id, "user_id": user_id})
+        if cm.get("ok"):
+            u = cm["result"]["user"]
+            first = u.get("first_name") or ""
+            last  = u.get("last_name") or ""
+            uname = u.get("username")
+            full = (first + (" " + last if last else "")).strip()
+            if full:
+                return full
+            if uname:
+                return "@" + uname
+    except Exception:
+        pass
+    return str(user_id)
+
+def _fmt_until(ts: int) -> str:
+    try:
+        return time.strftime("%d.%m.%y %H:%M", time.localtime(int(ts)))
+    except Exception:
+        return str(ts)
+
+def _build_rus_message(token: str, chat_id: int, user_id: int, msg_text: str|None, until_ts: int) -> tuple[str, str]:
+    chat_title, chat_link = _get_chat_title_and_link(token, chat_id)
+    user_name = _get_user_name(token, chat_id, user_id)
+    # HTML-safe
+    chat_title_esc = html.escape(chat_title, quote=True)
+    user_esc = html.escape(user_name, quote=True)
+    msg_esc = html.escape((msg_text or "").strip() or "[нет текста]", quote=True)
+    until_str = _fmt_until(until_ts)
+    if chat_link:
+        chat_repr = f'<a href="{html.escape(chat_link, quote=True)}">{chat_title_esc}</a>'
+    else:
+        chat_repr = chat_title_esc
+    text = (
+        f"Сообщение новичка {user_esc} удалено\n"
+        f"чат: {chat_repr}\n"
+        f"сообщение: {msg_esc}\n"
+        f"новичок до: {html.escape(until_str, quote=True)}"
+    )
+    # parse_mode
+    return text, "HTML"
+
+class _OnceNotifyHandler(logging.Handler):
+    """
+    Лог-хендлер: ловим одну «deleted» на пару chat:user и больше не спамим,
+    пока процесс не перезапустят (in-memory кэш).
+    """
+    _sent: set[str] = set()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            msg = record.getMessage()
+        except Exception:
+            return
+        m = _DELETED_RE.search(msg or "")
+        if not m:
+            return
+
+        chat_id = int(m.group("chat"))
+        user_id = int(m.group("uid"))
+        key = f"{chat_id}:{user_id}"
+        if key in self._sent:
+            return
+
+        token = (os.getenv("BOT_TOKEN") or "").strip()
+        admins_raw = (os.getenv("ADMIN_IDS") or "").replace(",", " ").split()
+        admins = [int(x) for x in admins_raw if x.isdigit()]
+        if not (token and admins):
+            return
+
+        msg_text = (m.group("msg") or "").strip()
+        until_ts = int(m.group("until"))
+
+        text, parse_mode = _build_rus_message(token, chat_id, user_id, msg_text, until_ts)
+
+        ok = 0
+        for aid in admins:
+            try:
+                _tg_call(token, "sendMessage", {
+                    "chat_id": aid,
+                    "text": text,
+                    "parse_mode": parse_mode,
+                    "disable_web_page_preview": True,
+                    "disable_notification": True,
+                })
+                ok += 1
+            } except Exception as e:  # noqa: E999 (не ломаем на старых линтерах)
+                try:
+                    logging.getLogger("support-join-guard").warning("LOGHOOK: dm fail admin=%s err=%r", aid, e)
+                except Exception:
+                    pass
+
+        if ok:
+            self._sent.add(key)
+            try:
+                logging.getLogger("support-join-guard").info("LOGHOOK: notify sent key=%s", key)
+            except Exception:
+                pass
+
+def install(logger_name: str = "support-join-guard") -> None:
+    lg = logging.getLogger(logger_name)
+    # не дублируем
+    for h in lg.handlers:
+        if isinstance(h, _OnceNotifyHandler):
+            return
+    lg.addHandler(_OnceNotifyHandler())
+    try:
+        lg.info("LOGHOOK: installed handler on %s", logger_name)
+    except Exception:
+        pass
