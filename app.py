@@ -963,7 +963,7 @@ async def on_join_request(event: 'ChatJoinRequest'):
             chat_link = f"https://t.me/{chat.username}"
         else:
             chat_link = f"tg://openmessage?chat_id={chat_id}"
-        title_html = f"<a href="{chat_link}">{title_html}</a>"
+        title_html = f'<a href="{chat_link}">{title_html}</a>'
 
     text = (
         f"👋 Привет! Чтобы вступить в {title_html}, пройдите короткую проверку.\n\n"
@@ -1230,7 +1230,7 @@ async def expire_old_requests() -> None:
                         chat_link = f"https://t.me/{chat.username}"
                     else:
                         chat_link = f"tg://openmessage?chat_id={chat_id}"
-                    title_html = f"<a href="{chat_link}">{title_html}</a>"
+                    title_html = f'<a href="{chat_link}">{title_html}</a>'
                 admin_mention = await get_public_admin_mention(chat_id)
                 if admin_mention:
                     txt = (
