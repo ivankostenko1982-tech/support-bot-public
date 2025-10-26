@@ -1062,6 +1062,18 @@ async def on_verify(cb: 'CallbackQuery'):
 
     if int(time.time()) - int(requested_at) > JOIN_REQUEST_TTL:
         clear_pending(cb.from_user.id, chat_id)
+        # --- auto-mute newcomer immediately ---
+        now = int(time.time())
+        forever_days = 400
+        try:
+            await bot.restrict_chat_member(
+                chat_id=chat_id,
+                user_id=cb.from_user.id,
+                permissions=_zero_perms(),
+                until_date=now + forever_days * 24 * 60 * 60,
+            )
+        except Exception as e:
+            logging.debug("auto-mute failed: %s", e)
         try:
             await bot.decline_chat_join_request(chat_id=chat_id, user_id=cb.from_user.id)
         except Exception:
@@ -1072,6 +1084,18 @@ async def on_verify(cb: 'CallbackQuery'):
         await _safe_approve(bot, chat_id, cb.from_user.id)
         record_approval(cb.from_user.id, chat_id)
         clear_pending(cb.from_user.id, chat_id)
+        # --- auto-mute newcomer immediately ---
+        now = int(time.time())
+        forever_days = 400
+        try:
+            await bot.restrict_chat_member(
+                chat_id=chat_id,
+                user_id=cb.from_user.id,
+                permissions=_zero_perms(),
+                until_date=now + forever_days * 24 * 60 * 60,
+            )
+        except Exception as e:
+            logging.debug("auto-mute failed: %s", e)
 
         await cb.message.edit_text(f"Готово! Заявка одобрена — добро пожаловать в «{chat_title_safe}».")
         await cb.answer("Подтверждено ✅")
