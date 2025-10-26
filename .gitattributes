@@ -3,3 +3,5 @@
 *.sh     text eol=lf
 *.md     text eol=lf
 *.txt    text eol=lf
+app.py merge=ours
+* text=auto eol=lf
