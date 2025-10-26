@@ -958,17 +958,12 @@ async def on_join_request(event: 'ChatJoinRequest'):
         title_html = f'<a href="{html.escape(open_url, quote=True)}">{html.escape(title)}</a>'
     else:
         title_html = html.escape(title)
-                chat = await bot.get_chat(chat_id)
-
-                if getattr(chat, "username", None):
-
-                    chat_link = f"https://t.me/{chat.username}"
-
-                else:
-
-                    chat_link = f"tg://openmessage?chat_id={chat_id}"
-
-                title_html = f"<a href=\"{chat_link}\">{title_html}</a>"
+        chat = await bot.get_chat(chat_id)
+        if getattr(chat, "username", None):
+            chat_link = f"https://t.me/{chat.username}"
+        else:
+            chat_link = f"tg://openmessage?chat_id={chat_id}"
+        title_html = f"<a href="{chat_link}">{title_html}</a>"
 
     text = (
         f"👋 Привет! Чтобы вступить в {title_html}, пройдите короткую проверку.\n\n"
@@ -1230,17 +1225,12 @@ async def expire_old_requests() -> None:
                     title_html = f'<a href="{html.escape(open_url, quote=True)}">{html.escape(title)}</a>'
                 else:
                     title_html = html.escape(title)
-                chat = await bot.get_chat(chat_id)
-
-                if getattr(chat, "username", None):
-
-                    chat_link = f"https://t.me/{chat.username}"
-
-                else:
-
-                    chat_link = f"tg://openmessage?chat_id={chat_id}"
-
-                title_html = f"<a href=\"{chat_link}\">{title_html}</a>"
+                    chat = await bot.get_chat(chat_id)
+                    if getattr(chat, "username", None):
+                        chat_link = f"https://t.me/{chat.username}"
+                    else:
+                        chat_link = f"tg://openmessage?chat_id={chat_id}"
+                    title_html = f"<a href="{chat_link}">{title_html}</a>"
                 admin_mention = await get_public_admin_mention(chat_id)
                 if admin_mention:
                     txt = (
