@@ -880,14 +880,14 @@ service_filter = (
 
 @router.message(service_filter)
 async def delete_service_messages(m: 'Message'):
-    if not state.sys_clean_enabled:
+    if not DELETE_SYSTEM_MESSAGES:
         return
     if ALLOWLIST and int(m.chat.id) not in ALLOWLIST:
         return
     try:
         await bot.delete_message(chat_id=m.chat.id, message_id=m.message_id)
     except Exception as e:
-        logging.debug("delete_message failed in chat %s mid=%s: %s", m.chat.id, m.message_id, e)
+        log.debug("delete_message failed in chat %s mid=%s: %s", m.chat.id, m.message_id, e)
 
 # ── Bot lockdown ───────────────────────────────────────────────────────────────
 def _zero_perms() -> 'ChatPermissions':
@@ -1079,7 +1079,7 @@ async def on_verify(cb: 'CallbackQuery'):
                 until_date=now + forever_days * 24 * 60 * 60,
             )
         except Exception as e:
-            logging.debug("auto-mute failed: %s", e)
+            log.debug("auto-mute failed: %s", e)
         try:
             await bot.decline_chat_join_request(chat_id=chat_id, user_id=cb.from_user.id)
         except Exception:
@@ -1101,9 +1101,24 @@ async def on_verify(cb: 'CallbackQuery'):
                 until_date=now + forever_days * 24 * 60 * 60,
             )
         except Exception as e:
-            logging.debug("auto-mute failed: %s", e)
-
-        await cb.message.edit_text(f"Готово! Заявка одобрена — добро пожаловать в «{chat_title_safe}».")
+            log.debug("auto-mute failed: %s", e)
+        title = chat_title or str(chat_id)
+        open_url = await get_group_open_url(chat_id)
+        if open_url:
+            title_html = f'<a href="{html.escape(open_url, quote=True)}">{html.escape(title)}</a>'
+        else:
+            title_html = html.escape(title)
+            chat = await bot.get_chat(chat_id)
+            if getattr(chat, "username", None):
+                chat_link = f"https://t.me/{chat.username}"
+            else:
+                chat_link = f"tg://openmessage?chat_id={chat_id}"
+            title_html = f'<a href="{chat_link}">{title_html}</a>'
+        admin_mention = await get_public_admin_mention(chat_id)
+        if admin_mention:
+            await cb.message.edit_text(f"Чтобы получить право писать, пройдите проверку у администратора {admin_mention}.")
+        else:
+            await cb.message.edit_text(f"Чтобы получить право писать, пройдите проверку у администратора.")
         await cb.answer("Подтверждено ✅")
 
         url = await get_group_open_url(chat_id)
