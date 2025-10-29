@@ -13,7 +13,7 @@ except Exception:
     HAS_NEWCOMER_TESTONLY = False
 # === END NEWCOMER DIAG IMPORTS ===
 
-##
+####
 # BEGIN PATCH:newcomer_until
 def newcomer_until(user_id: int, chat_id: int) -> int | None:
     """Return UNIX timestamp until which user is considered a newcomer, or None if not approved yet."""
