@@ -1,26 +1,375 @@
-# Support Bot (Telegram) — полная документация
+# Support Bot — полное руководство (LIVE / WORK / DEV)
 
-_Собрано автоматически: 2025-10-20 20:58:26Z_
+Док — актуален для текущей прод-схемы с **bare**‑репозиторием, автоматическим деплоем через `post-receive`, переносом БД в `/var/lib/tgbots/support`, зеркалом **DEV**, логированием хэшей и ручным триггером деплоя.
 
 ---
 
-## Обзор
+## Содержание
+- [Архитектура каталогов](#архитектура-каталогов)
+- [Требования и системный пользователь](#требования-и-системный-пользователь)
+- [Инициализация bare‑репозитория](#инициализация-bareрепозитория)
+- [Git‑поток и запрет правок в WORK/LIVE](#gitпоток-и-запрет-правок-в-worklive)
+- [Хук `post-receive` (полный листинг)](#хук-post-receive-полный-листинг)
+- [Ручной триггер деплоя](#ручной-триггер-деплоя)
+- [Systemd: юнит и override](#systemd-юнит-и-override)
+- [Переменные окружения](#переменные-окружения)
+- [База данных SQLite и миграции](#база-данных-sqlite-и-миграции)
+- [Поведение бота (join‑guard, TTL, “вечный mute”)](#поведение-бота-joinguard-ttl-вечный-mute)
+- [Очистка системных сообщений](#очистка-системных-сообщений)
+- [Диагностика и частые ошибки](#диагностика-и-частые-ошибки)
+- [Резервные копии](#резервные-копии)
+- [Журналы и отладка](#журналы-и-отладка)
+- [Правила разработки](#правила-разработки)
+- [FAQ](#faq)
 
+---
 
-Этот README агрегирует всю актуальную эксплуатационную документацию проекта и включает:
-- Полное содержание предоставленных *.txt файлов (ниже — в отдельных разделах).
-- Описание инфраструктуры деплоя через **git** (server bare → work-tree → боевой `app.py`) и зеркала на GitHub.
-- Изменения, добавленные в ходе аудита (минимальные и безопасные правки).
+## Архитектура каталогов
 
-**Критические пути:**  
-- Боевой код: `/opt/tgbots/bots/support/app.py`  
-- Bare-репозиторий: `/opt/tgbots/git/support.git`  
-- Work-tree хуков: `/opt/tgbots/repos/support`  
-- Утилиты/скрипты: `/opt/tgbots/utils`  
-- Сервис: `tgbot@support.service`  
-- ENV: `/etc/tgbots/support.env`  
-- SQLite (WAL): `/opt/tgbots/bots/support/join_guard_state.db`
+```
+/opt/tgbots/
+├── git/
+│   └── support.git                 # bare-репозиторий (сюда пушим из dev-клона)
+├── repos/
+│   ├── support/                    # WORK (staging): сюда экспортит хук
+│   └── deploy-tmp/                 # временные снапшоты для py_compile
+└── bots/
+    ├── support/                    # LIVE: боевой код (из WORK rsync)
+    └── support-dev/                # DEV-зеркало (не используется сервисом, для сравнения)
+/var/lib/tgbots/support/            # runtime‑состояние (SQLite, бэкапы)
+```
 
+**Важно:** директории `/opt/tgbots/repos/support` (WORK) и `/opt/tgbots/bots/support` (LIVE) не редактируем руками — изменения только через пуш в `support.git` ветку `main`.
+
+Исторический каталог **`/opt/tgbots/repos/support-seed`** больше не используется и может быть удалён после валидации миграции.
+
+---
+
+## Требования и системный пользователь
+
+Создать пользователя/группу `tgbot` (если вдруг отсутствуют):
+
+```bash
+getent passwd tgbot || useradd --system --home /opt/tgbot --shell /usr/sbin/nologin tgbot
+getent group  tgbot || groupadd --system tgbot
+```
+
+Проверить базовые права на дерево:
+
+```bash
+chmod 0755 /opt /opt/tgbots /opt/tgbots/{git,repos,bots}
+install -d -o tgbot -g tgbot -m 0750 /var/lib/tgbots/support
+```
+
+---
+
+## Инициализация bare‑репозитория
+
+```bash
+# bare
+install -d /opt/tgbots/git
+git init --bare /opt/tgbots/git/support.git
+
+# trust для hook-скриптов
+git config --global --add safe.directory /opt/tgbots/git/support.git
+```
+
+Добавить remote на GitHub (опционально, для зеркала):
+
+```bash
+# внутри bare репозитория:
+cd /opt/tgbots/git/support.git
+git remote add github https://github.com/<user>/support-bot-public.git  # при наличии прав
+```
+
+---
+
+## Git‑поток и запрет правок в WORK/LIVE
+
+- Разработку ведём в **локальном клоне**, пушим в `origin /opt/tgbots/git/support.git`, ветка **`main`**.
+- Хук `post-receive` разворачивает код → **WORK** → **LIVE** (+ **DEV**).
+- В WORK/LIVE руками не меняем файлы (будут перезатираться rsync’ом).
+
+---
+
+## Хук `post-receive` (полный листинг)
+
+Файл: **`/opt/tgbots/git/support.git/hooks/post-receive`**
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+BARE="/opt/tgbots/git/support.git"
+WORK="/opt/tgbots/repos/support"
+LIVE="/opt/tgbots/bots/support"
+DEV="/opt/tgbots/bots/support-dev"
+TMPROOT="/opt/tgbots/repos/deploy-tmp"
+STATE_DIR="/var/lib/tgbots/support"
+DB="$STATE_DIR/join_guard_state.db"
+UNIT="tgbot@support.service"
+
+mkdir -p "$TMPROOT"
+
+read oldrev newrev refname || true
+refname="${refname:-}"
+if [[ "$refname" != "refs/heads/main" && -n "$refname" ]]; then
+  echo "[post-receive] skip ref: $refname"
+  exit 0
+fi
+
+TS="$(date -u +%Y%m%d-%H%M%SZ)"
+EXPORT_DIR="$TMPROOT/export.$TS"
+mkdir -p "$EXPORT_DIR"
+
+echo "[post-receive] export snapshot…"
+git --git-dir="$BARE" archive --format=tar "$newrev" | tar -C "$EXPORT_DIR" -xpf -
+
+echo "[post-receive] py_compile…"
+python3 - <<PY
+import compileall, sys
+ok = compileall.compile_dir("$EXPORT_DIR", quiet=1, force=True, maxlevels=10)
+sys.exit(0 if ok else 1)
+PY
+
+echo "[post-receive] rsync → WORK…"
+rsync -a --delete \
+  --exclude='*.pyc' --exclude='__pycache__/' --exclude='.env' \
+  --exclude='join_guard_state.db*' --exclude='var/' \
+  "$EXPORT_DIR"/ "$WORK"/
+
+echo "[post-receive] rsync → LIVE…"
+rsync -a --delete \
+  --exclude='*.pyc' --exclude='__pycache__/' --exclude='.env' \
+  --exclude='join_guard_state.db*' --exclude='var/' \
+  "$WORK"/ "$LIVE"/
+
+if [[ -d "$DEV" ]]; then
+  echo "[post-receive] rsync → DEV…"
+  rsync -a --delete \
+    --exclude='*.pyc' --exclude='__pycache__/' --exclude='.env' \
+    --exclude='join_guard_state.db*' --exclude='var/' \
+    "$WORK"/ "$DEV"/
+fi
+
+echo "[post-receive] ensure state dir & db perms…"
+install -d -o tgbot -g tgbot -m 0750 "$STATE_DIR"
+if [[ -e "$DB" ]]; then
+  mkdir -p "$STATE_DIR/db-backups"
+  cp -a "$DB" "$STATE_DIR/db-backups/$TS.db"
+fi
+chown tgbot:tgbot "$DB" 2>/dev/null || true
+chmod 0664 "$DB" 2>/dev/null || true
+
+# Хэши и диффы
+sha() { test -f "$1" && sha256sum "$1" | awk '{print $1}' || echo "NA"; }
+echo "[post-receive] hashes (app.py)"
+printf "  WORK: %s\n" "$(sha "$WORK/app.py")"
+printf "  LIVE: %s\n" "$(sha "$LIVE/app.py")"
+test -d "$DEV" && printf "  DEV : %s\n" "$(sha "$DEV/app.py")"
+
+echo "[post-receive] changed files (WORK→LIVE)…"
+rsync -an --delete "$WORK"/ "$LIVE"/ | sed '1,3d' || true
+
+echo "[post-receive] restart service…"
+systemctl restart "$UNIT" || true
+
+# опциональный push на GitHub
+if git --git-dir="$BARE" remote get-url github >/dev/null 2>&1; then
+  echo "[post-receive] push → GitHub…"
+  git --git-dir="$BARE" push github main || echo "[post-receive] GitHub push skipped"
+fi
+```
+
+Права и доверие:
+
+```bash
+chmod +x /opt/tgbots/git/support.git/hooks/post-receive
+git config --global --add safe.directory /opt/tgbots/git/support.git
+```
+
+---
+
+## Ручной триггер деплоя
+
+Повторно «проиграть» последний коммит (полезно после правки хука):
+
+```bash
+BARE=/opt/tgbots/git/support.git
+OLD=$(git --git-dir="$BARE" rev-parse refs/heads/main@{1})
+NEW=$(git --git-dir="$BARE" rev-parse refs/heads/main)
+printf '%s %s refs/heads/main\n' "$OLD" "$NEW" | "$BARE/hooks/post-receive"
+```
+
+Если bare не доверен Git’ом:
+
+```bash
+git config --global --add safe.directory /opt/tgbots/git/support.git
+```
+
+---
+
+## Systemd: юнит и override
+
+Шаблон: `/etc/systemd/system/tgbot@.service` (ключевые настройки)
+
+```
+[Service]
+User=tgbot
+Group=tgbot
+Type=simple
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=yes
+EnvironmentFile=/etc/tgbots/support.env
+WorkingDirectory=/opt/tgbots/bots/support
+ExecStart=/opt/tgbots/.venv/bin/python /opt/tgbots/bots/support/app.py --instance %i
+Restart=always
+RestartSec=3
+```
+
+Override для instance **support**: `/etc/systemd/system/tgbot@support.service.d/override.conf`
+
+```ini
+[Service]
+# каталог для runtime-данных
+ExecStartPre=/usr/bin/install -d -o tgbot -g tgbot -m 0750 /var/lib/tgbots/support
+# привести владельца БД (если существует)
+ExecStartPre=/usr/bin/chown tgbot:tgbot /var/lib/tgbots/support/join_guard_state.db
+ExecStartPre=/usr/bin/chmod 0664       /var/lib/tgbots/support/join_guard_state.db
+
+# разрешаем запись в runtime и в LIVE-каталог при строгой защите
+ReadWritePaths=/var/lib/tgbots /opt/tgbots/bots/support
+
+# переопределяем ExecStart на конкретный app.py
+ExecStart=
+ExecStart=/opt/tgbots/.venv/bin/python /opt/tgbots/bots/support/app.py --instance support
+```
+
+Применение:
+
+```bash
+systemctl daemon-reload
+systemctl restart tgbot@support.service
+systemctl status  tgbot@support.service
+```
+
+---
+
+## Переменные окружения
+
+Файл: `/etc/tgbots/support.env`
+
+```env
+BOT_TOKEN=123:ABC
+ADMIN_IDS=299819126,761192308
+ALLOWLIST=-1002099408662,-1001878435829,...
+DELETE_SYSTEM_MESSAGES=True
+LOCKDOWN_NONADMIN_BOTS=True
+AGGRESSIVE_CHANNEL_ANTILINK=True
+SQLITE_PATH=/var/lib/tgbots/support/join_guard_state.db
+# опционально:
+TEST_CHAT_ID=-1002099408662
+TRACE_TEST_CHAT=False
+```
+
+- `ADMIN_IDS` — список ID; в DM используется первый доступный для кликабельного mention’а.
+- `SQLITE_PATH` — всегда указывает на `/var/lib/...`, чтобы rsync кода не влиял.
+
+---
+
+## База данных SQLite и миграции
+
+- Файл: `/var/lib/tgbots/support/join_guard_state.db`
+- Владелец/права: каталог `support` — `0750` (tgbot:tgbot), файл БД — `0664` (tgbot:tgbot).
+- WAL включается при старте (PRAGMA `journal_mode=WAL`).
+
+Диагностика от имени `tgbot`:
+
+```bash
+runuser -u tgbot -- python3 - <<'PY'
+import sqlite3
+p="/var/lib/tgbots/support/join_guard_state.db"
+con=sqlite3.connect(p, timeout=2)
+print("journal_mode=", con.execute("PRAGMA journal_mode;").fetchone())
+print("integrity=",    con.execute("PRAGMA integrity_check;").fetchone())
+con.close()
+PY
+```
+
+Если бот жалуется `unable to open database file` — проверь `namei -l /var/lib/tgbots/support/join_guard_state.db` и `ReadWritePaths` в systemd‑юните.
+
+---
+
+## Поведение бота (join‑guard, TTL, “вечный mute”)
+
+- **Join Request** → DM с кнопкой «Я человек».
+- После нажатия: **approve + restrict** на ~400 дней (эмуляция «навсегда»), т.е. писать нельзя до ручного апрува админом.
+- В DM используется **кликабельное название чата** и **кликабельный админ** (из `ADMIN_IDS`).
+- Фоновая корутина `expirer_loop` раз в N секунд проверяет `pending_requests` и для просроченных заявок выполняет **approve + restrict + DM**. Это покрывает случаи простоя, когда бот был офлайн.
+
+Если видите, что после восстановления процесса пользователи оказываются без mute — почти всегда проблема в недоступности БД (`SQLITE_PATH`/права) и падении `expire_old_requests()`.
+
+---
+
+## Очистка системных сообщений
+
+Фильтр `service_filter` удаляет `new_chat_members`, `left_chat_member`, `new_chat_title`, `new_chat_photo`, `delete_chat_photo`, `group_chat_created`, `supergroup_chat_created`, `migrate_*`, `pinned_message` — **только** если чат в `ALLOWLIST` и `DELETE_SYSTEM_MESSAGES=True`, и у бота есть право `can_delete_messages`. Ошибки удаления логируются на `DEBUG`.
+
+---
+
+## Диагностика и частые ошибки
+
+- `attempt to write a readonly database`
+  - Проверь владельца/права файла и каталогов вверх по дереву; убедись, что systemd разрешает запись в `ReadWritePaths`.
+- `unable to open database file`
+  - Нет каталога/не те права/строгая защита FS. Проверь `namei -l` и `ProtectSystem/ReadWritePaths`.
+- `invalid user 'tgbot'`
+  - Создай системного пользователя/группу (см. выше).
+- DM `bot can't initiate conversation`
+  - Пользователь ещё не писал боту — это штатно.
+
+---
+
+## Резервные копии
+
+Каждый деплой делает копию БД в `/var/lib/tgbots/support/db-backups/<UTC>.db`.  
+Рекомендуется периодический offsite‑бэкап каталога `/var/lib/tgbots/support` (исключая `*.wal`/`*.shm`).
+
+---
+
+## Журналы и отладка
+
+```bash
+journalctl -u tgbot@support.service -n 200 --no-pager
+grep -E 'BOOT:|SQLITE_PATH=|Expirer loop started|TTL expired' /var/log/syslog 2>/dev/null || true
+```
+
+Сверка хэшей после деплоя есть в выводе `post-receive`:
+- `sha256 app.py` для WORK/LIVE/DEV
+- Список изменённых файлов (dry‑run `rsync -an`), чтобы видеть, что реально обновилось.
+
+---
+
+## Правила разработки
+
+- Пушим только в bare `support.git` → хук сам обновит WORK/LIVE/DEV.
+- Для безопасных проверок сравнивай файлы в `bots/support-dev`.
+- Любые прямые правки в WORK/LIVE будут утеряны при следующем деплое.
+
+---
+
+## FAQ
+
+**Почему LIVE иногда не совпадает с GitHub?**  
+Хук сначала обновляет WORK/LIVE, а пуш на GitHub — опциональный. При недоступности сети зеркалирование пропускается. Истиной для деплоя является **bare**‑репозиторий на сервере.
+
+**Зачем переносить БД из каталога кода?**  
+Чтобы rsync кода никогда не трогал runtime‑состояние. Теперь БД живёт в `/var/lib/tgbots/support` и не затирается при деплоях.
+
+**Можно ли деплоить не `main`?**  
+Нет, хук настроен только на `refs/heads/main` по соображениям простоты и безопасности.
 
 ## NEWCOMER GATE (join‑guard)
 
