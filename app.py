@@ -889,6 +889,15 @@ async def delete_service_messages(m: 'Message'):
     except Exception as e:
         log.debug("delete_message failed in chat %s mid=%s: %s", m.chat.id, m.message_id, e)
 
+# ── Per-chat lock to serialize approve+restrict ───────────────────────────────
+_chat_locks: dict[int, asyncio.Lock] = {}
+
+def _lock_for(chat_id: int) -> asyncio.Lock:
+    lock = _chat_locks.get(chat_id)
+    if lock is None:
+        lock = _chat_locks[chat_id] = asyncio.Lock()
+    return lock
+
 # ── Bot lockdown ───────────────────────────────────────────────────────────────
 def _zero_perms() -> 'ChatPermissions':
     return ChatPermissions(
@@ -903,25 +912,49 @@ def _zero_perms() -> 'ChatPermissions':
         can_manage_topics=False,
     )
 
+from aiogram.exceptions import TelegramBadRequest
+
 async def _restrict_user_forever(bot, chat_id: int, user_id: int) -> None:
     """
-    Обязательный «вечный» мьют (~400 дней). Без ретраев.
-    Гарантирует факт мьюта: если не удалось или не закрепилось — бросает исключение.
+    Обязательный «вечный» мьют (~400 дней).
+    Гарантирует факт мьюта: если не удалось — бросает исключение.
+    Делает короткое ожидание членства и один узкий ретрай только на 429.
     """
-    until_dt = datetime.now(timezone.utc) + timedelta(days=400)
-    await bot.restrict_chat_member(
-        chat_id=chat_id,
-        user_id=user_id,
-        permissions=_zero_perms(),
-        until_date=until_dt,  # datetime с TZ — надёжнее
-    )
+    # 1) дождаться, что пользователь уже стал членом после approve
+    for _ in range(3):  # ~до 450 мс максимум
+        cm = await bot.get_chat_member(chat_id, user_id)
+        status = getattr(cm, "status", None)
+        if status == "member":
+            break
+        await asyncio.sleep(0.15)
 
-    # Подтверждаем фактом (без сложной логики — только статус)
+    # 2) попытка restrict
+    until_dt = datetime.now(timezone.utc) + timedelta(days=400)
+    try:
+        await bot.restrict_chat_member(
+            chat_id=chat_id,
+            user_id=user_id,
+            permissions=_zero_perms(),
+            until_date=until_dt,
+        )
+    except TelegramBadRequest as e:
+        msg = (e.message or "").lower()
+        # 429/Retry-After: один мягкий ретрай
+        if "too many requests" in msg or "retry" in msg:
+            await asyncio.sleep(0.5)
+            await bot.restrict_chat_member(
+                chat_id=chat_id,
+                user_id=user_id,
+                permissions=_zero_perms(),
+                until_date=until_dt,
+            )
+        else:
+            raise
+
+    # 3) подтвердить фактом
     cm = await bot.get_chat_member(chat_id, user_id)
     if getattr(cm, "status", None) != "restricted":
-        raise RuntimeError(
-            f"mute did not stick: status={getattr(cm, 'status', None)!r}"
-        )
+        raise RuntimeError(f"mute did not stick: status={getattr(cm, 'status', None)!r}")
 
 async def _restrict_bot_forever(chat_id: int, user_id: int) -> None:
     if not state.botlock_enabled:
@@ -1089,11 +1122,13 @@ async def on_verify(cb: 'CallbackQuery'):
     if int(time.time()) - int(requested_at) > JOIN_REQUEST_TTL:
         clear_pending(cb.from_user.id, chat_id)
         # --- auto-mute newcomer immediately ---
-        try:
-            await _restrict_user_forever(bot, chat_id, cb.from_user.id)
-        except Exception as e:
-            log.error("restrict_user_forever failed user_id=%s chat_id=%s: %s", cb.from_user.id, chat_id, e)
-            raise
+        lock = _lock_for(chat_id)
+        async with lock:
+            try:
+                await _restrict_user_forever(bot, chat_id, cb.from_user.id)
+            except Exception as e:
+                log.error("restrict_user_forever failed user_id=%s chat_id=%s: %s", cb.from_user.id, chat_id, e)
+                raise
 
         try:
             await bot.decline_chat_join_request(chat_id=chat_id, user_id=cb.from_user.id)
@@ -1106,12 +1141,16 @@ async def on_verify(cb: 'CallbackQuery'):
         record_approval(cb.from_user.id, chat_id)
         clear_pending(cb.from_user.id, chat_id)
         await asyncio.sleep(0.3)  # даём Telegram добросить «участника»
+
         # --- auto-mute newcomer immediately ---
-        try:
-            await _restrict_user_forever(bot, chat_id, cb.from_user.id)
-        except Exception as e:
-            log.error("restrict_user_forever failed user_id=%s chat_id=%s: %s", cb.from_user.id, chat_id, e)
-            raise
+        lock = _lock_for(chat_id)
+        async with lock:
+            try:
+                await _restrict_user_forever(bot, chat_id, cb.from_user.id)
+            except Exception as e:
+                log.error("restrict_user_forever failed user_id=%s chat_id=%s: %s", cb.from_user.id, chat_id, e)
+                raise
+
         title = chat_title or str(chat_id)
         open_url = await get_group_open_url(chat_id)
         if open_url:
@@ -1228,57 +1267,103 @@ async def on_chat_member_update(ev: 'ChatMemberUpdated'):
 # ── TTL Expirer ────────────────────────────────────────────────────────────────
 async def expire_old_requests() -> None:
     now = int(time.time())
-    with closing(sqlite3.connect(SQLITE_PATH, timeout=3.0)) as conn:
-        rows = list(conn.execute("SELECT user_id, chat_id, chat_title, requested_at FROM pending_requests"))
-        for user_id, chat_id, chat_title, requested_at in rows:
-            if now - requested_at <= JOIN_REQUEST_TTL:
-                continue
-            try:
-                log.info("TTL expired: approving & restricting user_id=%s chat_id=%s", user_id, chat_id)
-                try:
-                    await _safe_approve(bot, chat_id, user_id)
-                except Exception as e:
-                    log.warning("approve failed user_id=%s chat_id=%s: %s", user_id, chat_id, e)
-                record_approval(user_id, chat_id)
-                await asyncio.sleep(0.3)
+    try:
+        with closing(sqlite3.connect(SQLITE_PATH, timeout=3.0)) as conn:
+            # Можно использовать Row для читаемости, но не обязательно
+            # conn.row_factory = sqlite3.Row
+
+            rows = list(conn.execute(
+                "SELECT user_id, chat_id, chat_title, requested_at FROM pending_requests"
+            ))
+
+            for user_id, chat_id, chat_title, requested_at in rows:
+                # TTL ещё не истёк — пропускаем
+                if now - requested_at <= JOIN_REQUEST_TTL:
+                    continue
 
                 try:
-                    await _restrict_user_forever(bot, chat_id, user_id)
-                except Exception as e:
-                    log.error("expire_old_requests: restrict failed user_id=%s chat_id=%s: %s", user_id, chat_id, e)
-                    raise
+                    log.info("TTL expired: approving & restricting user_id=%s chat_id=%s",
+                             user_id, chat_id)
 
-                title = chat_title or str(chat_id)
-                open_url = await get_group_open_url(chat_id)
-                if open_url:
-                    title_html = f'<a href="{html.escape(open_url, quote=True)}">{html.escape(title)}</a>'
-                else:
-                    title_html = html.escape(title)
-                    chat = await bot.get_chat(chat_id)
-                    if getattr(chat, "username", None):
-                        chat_link = f"https://t.me/{chat.username}"
+                    # ВАЖНО: последовательность approve → (короткая задержка) → restrict
+                    # под пер-чатовым замком, чтобы не гоняться за параллельными задачами.
+                    lock = _lock_for(chat_id)
+                    async with lock:
+                        # 1) approve (может кидать — мы логируем и пробрасываем)
+                        try:
+                            await _safe_approve(bot, chat_id, user_id)
+                        except Exception as e:
+                            log.error("expire_old_requests: approve failed user_id=%s chat_id=%s: %s",
+                                      user_id, chat_id, e)
+                            raise
+
+                        # 2) отметить в учёте
+                        record_approval(user_id, chat_id)
+
+                        # 3) дать Telegram «догрузить» членство до статуса member
+                        await asyncio.sleep(0.3)
+
+                        # 4) обязательный мьют; на сбое — ERROR и пробрасываем
+                        try:
+                            await _restrict_user_forever(bot, chat_id, user_id)
+                        except Exception as e:
+                            log.error("expire_old_requests: restrict failed user_id=%s chat_id=%s: %s",
+                                      user_id, chat_id, e)
+                            raise
+
+                    # --- уведомление пользователю в личку (как у тебя было) ---
+                    title = chat_title or str(chat_id)
+                    open_url = await get_group_open_url(chat_id)
+                    if open_url:
+                        title_html = f'<a href="{html.escape(open_url, quote=True)}">{html.escape(title)}</a>'
                     else:
-                        chat_link = f"tg://openmessage?chat_id={chat_id}"
-                    title_html = f'<a href="{chat_link}">{title_html}</a>'
-                admin_mention = await get_public_admin_mention(chat_id)
-                if admin_mention:
-                    txt = (
-                        f"Вы приняты в группу {title_html}, но отправка сообщений отключена навсегда.\n"
-                        f"Чтобы получить право писать, пройдите проверку у администратора {admin_mention}."
-                    )
-                else:
-                    txt = (
-                        f"Вы приняты в группу {title_html}, но отправка сообщений отключена навсегда.\n"
-                        "Чтобы получить право писать, пройдите проверку у администратора."
-                    )
-                try:
-                    await bot.send_message(chat_id=user_id, text=txt, disable_web_page_preview=True)
-                except Exception as e:
-                    log.debug("DM to user %s failed: %s", user_id, e)
-            except Exception:
-                logging.exception("approve+restrict failed for user_id=%s chat_id=%s", user_id, chat_id)
-            conn.execute("DELETE FROM pending_requests WHERE user_id=? AND chat_id=?", (user_id, chat_id))
-        conn.commit()
+                        title_html = html.escape(title)
+                        chat = await bot.get_chat(chat_id)
+                        if getattr(chat, "username", None):
+                            chat_link = f"https://t.me/{chat.username}"
+                        else:
+                            chat_link = f"tg://openmessage?chat_id={chat_id}"
+                        title_html = f'<a href="{chat_link}">{title_html}</a>'
+
+                    admin_mention = await get_public_admin_mention(chat_id)
+                    if admin_mention:
+                        txt = (
+                            f"Вы приняты в группу {title_html}, но отправка сообщений отключена навсегда.\n"
+                            f"Чтобы получить право писать, пройдите проверку у администратора {admin_mention}."
+                        )
+                    else:
+                        txt = (
+                            f"Вы приняты в группу {title_html}, но отправка сообщений отключена навсегда.\n"
+                            "Чтобы получить право писать, пройдите проверку у администратора."
+                        )
+
+                    try:
+                        await bot.send_message(chat_id=user_id, text=txt, disable_web_page_preview=True)
+                    except Exception as e:
+                        log.debug("DM to user %s failed: %s", user_id, e)
+
+                except Exception:
+                    # Ловим любые сбои в связке approve→restrict→notify, пишем стек
+                    logging.exception("expire_old_requests: approve+restrict failed for user_id=%s chat_id=%s",
+                                      user_id, chat_id)
+
+                # ВАЖНО: запись обработана (успешно или с ошибкой) — удаляем из pending,
+                # чтобы цикл не застревал на одном и том же ряду бесконечно.
+                conn.execute(
+                    "DELETE FROM pending_requests WHERE user_id=? AND chat_id=?",
+                    (user_id, chat_id)
+                )
+
+            conn.commit()
+
+    except sqlite3.OperationalError as e:
+        # Если диск переполнен / каталог недоступен — не валим цикл, логируем и выходим
+        log.error("expire_old_requests: sqlite OperationalError on %s: %s", SQLITE_PATH, e)
+        return
+    except Exception:
+        log.exception("expire_old_requests: unexpected crash on %s", SQLITE_PATH)
+        return
+
 
 async def expirer_loop():
     await asyncio.sleep(5)
