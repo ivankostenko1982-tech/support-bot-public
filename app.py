@@ -290,8 +290,6 @@ def utils_path(name: str) -> str:
         print(f"[DBCHK] ERROR: {e}")
 
 
-
-
 # Optional systemd watchdog
 try:
     from sdnotify import SystemdNotifier  # type: ignore
@@ -389,7 +387,6 @@ dp.include_router(cmd_router)
 
 dp.include_router(router)
 
-
 # ── App State ───────────────────────────────────────────────────────────────────
 @dataclass
 class AppState:
@@ -468,6 +465,73 @@ def set_pending(user_id: int, chat_id: int, chat_title: str) -> None:
             (user_id, chat_id, chat_title, int(time.time())),
         )
         conn.commit()
+
+async def _is_restricted_now(bot, chat_id: int, user_id: int) -> bool:
+    """
+    Считаем «мьют уже есть», если ChatMemberRestricted с until_date далеко в будущем
+    ИЛИ разрешения фактически нулевые (все False).
+    """
+    try:
+        cm = await bot.get_chat_member(chat_id, user_id)
+    except Exception:
+        return False
+
+    # ChatMemberRestricted имеет поля .is_member, .until_date и .can_* через permissions
+    until = getattr(cm, "until_date", 0) or 0
+    perms = getattr(cm, "permissions", None)
+
+    # «навсегда» у нас ~400 дней
+    forever_cutoff = int(time.time()) + 300 * 24 * 60 * 60  # запас
+    hard_restricted = until and until >= forever_cutoff
+
+    zero_perms = False
+    if perms is not None:
+        # если есть объект ChatPermissions — считаем «нулевые»
+        zero_perms = not any(getattr(perms, k, False) for k in vars(perms))
+
+    return bool(hard_restricted or zero_perms)
+
+
+async def _restrict_forever_with_retry(bot, chat_id: int, user_id: int, attempts: int = 5) -> bool:
+    """
+    Идемпотентно: сначала проверяем, не замьючен ли уже.
+    Делаем retry с backoff на 429/5xx, на каждый шаг перепроверяем факт мьюта.
+    Возвращаем True, если по итогу пользователь в мьюте.
+    """
+    if await _is_restricted_now(bot, chat_id, user_id):
+        return True
+
+    base_sleep = 0.5
+    forever_days = 400
+    until_date = int(time.time()) + forever_days * 24 * 60 * 60
+
+    for i in range(attempts):
+        try:
+            await bot.restrict_chat_member(
+                chat_id=chat_id,
+                user_id=user_id,
+                permissions=_zero_perms(),
+                until_date=until_date,
+            )
+            # проверяем факт
+            if await _is_restricted_now(bot, chat_id, user_id):
+                return True
+        except Exception as e:
+            # Специально мягко обрабатываем RetryAfter и 5xx
+            msg = str(e).lower()
+            # Retry-логика: 429/5xx/«retry after»
+            if "retry" in msg or "too many requests" in msg or "service unavailable" in msg or "internal" in msg:
+                await asyncio.sleep(base_sleep * (2 ** i))
+            else:
+                # Прочие ошибки логируем и выходим из цикла retry
+                logging.warning("restrict failed user_id=%s chat_id=%s attempt=%s err=%s", user_id, chat_id, i+1, e)
+                break
+
+        # если вдруг без исключения, но факт не подтвердился — небольшой backoff и ещё попытка
+        await asyncio.sleep(base_sleep * (2 ** i))
+
+    # последняя проверка на всякий
+    return await _is_restricted_now(bot, chat_id, user_id)
 
 def clear_pending(user_id: int, chat_id: int) -> None:
     with closing(sqlite3.connect(SQLITE_PATH, timeout=3.0)) as conn:
