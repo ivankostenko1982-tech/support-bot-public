@@ -1154,9 +1154,12 @@ async def on_verify(cb: 'CallbackQuery'):
         await _safe_approve(bot, chat_id, cb.from_user.id)
         record_approval(cb.from_user.id, chat_id)
         clear_pending(cb.from_user.id, chat_id)
-        await asyncio.sleep(0.2)  # даём Telegram добросить «участника»
+        await asyncio.sleep(0.3)  # даём Telegram добросить «участника»
+        ok = await _restrict_forever_with_retry(bot, chat_id, cb.from_user.id)
+        if not ok:
+            logging.warning("auto-mute not ensured after verify user_id=%s chat_id=%s", cb.from_user.id, chat_id)
         # --- auto-mute newcomer immediately ---
-        now = int(time.time())
+        '''now = int(time.time())
         forever_days = 400
         try:
             await bot.restrict_chat_member(
@@ -1166,7 +1169,7 @@ async def on_verify(cb: 'CallbackQuery'):
                 until_date=now + forever_days * 24 * 60 * 60,
             )
         except Exception as e:
-            log.debug("auto-mute failed: %s", e)
+            log.debug("auto-mute failed: %s", e)'''
         title = chat_title or str(chat_id)
         open_url = await get_group_open_url(chat_id)
         if open_url:
@@ -1296,7 +1299,10 @@ async def expire_old_requests() -> None:
                     log.warning("approve failed user_id=%s chat_id=%s: %s", user_id, chat_id, e)
                 record_approval(user_id, chat_id)
                 await asyncio.sleep(0.3)
-                forever_days = 400
+                ok = await _restrict_forever_with_retry(bot, chat_id, user_id)
+                if not ok:
+                    logging.warning("auto-mute not ensured after ttl user_id=%s chat_id=%s", user_id, chat_id)
+                '''forever_days = 400
                 try:
                     await bot.restrict_chat_member(
                         chat_id=chat_id,
@@ -1305,7 +1311,7 @@ async def expire_old_requests() -> None:
                         until_date=now + forever_days * 24 * 60 * 60,
                     )
                 except Exception as e:
-                    log.error("restrict failed user_id=%s chat_id=%s: %s", user_id, chat_id, e)
+                    log.error("restrict failed user_id=%s chat_id=%s: %s", user_id, chat_id, e)'''
                 title = chat_title or str(chat_id)
                 open_url = await get_group_open_url(chat_id)
                 if open_url:
