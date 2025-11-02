@@ -59,7 +59,7 @@ import os, time, sqlite3, asyncio, logging, html, hmac, re, platform
 from dataclasses import dataclass
 from contextlib import closing
 from typing import Optional, List, Tuple, Set
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.exceptions import TelegramBadRequest
@@ -903,6 +903,26 @@ def _zero_perms() -> 'ChatPermissions':
         can_manage_topics=False,
     )
 
+async def _restrict_user_forever(bot, chat_id: int, user_id: int) -> None:
+    """
+    Обязательный «вечный» мьют (~400 дней). Без ретраев.
+    Гарантирует факт мьюта: если не удалось или не закрепилось — бросает исключение.
+    """
+    until_dt = datetime.now(timezone.utc) + timedelta(days=400)
+    await bot.restrict_chat_member(
+        chat_id=chat_id,
+        user_id=user_id,
+        permissions=_zero_perms(),
+        until_date=until_dt,  # datetime с TZ — надёжнее
+    )
+
+    # Подтверждаем фактом (без сложной логики — только статус)
+    cm = await bot.get_chat_member(chat_id, user_id)
+    if getattr(cm, "status", None) != "restricted":
+        raise RuntimeError(
+            f"mute did not stick: status={getattr(cm, 'status', None)!r}"
+        )
+
 async def _restrict_bot_forever(chat_id: int, user_id: int) -> None:
     if not state.botlock_enabled:
         return
@@ -1069,17 +1089,12 @@ async def on_verify(cb: 'CallbackQuery'):
     if int(time.time()) - int(requested_at) > JOIN_REQUEST_TTL:
         clear_pending(cb.from_user.id, chat_id)
         # --- auto-mute newcomer immediately ---
-        now = int(time.time())
-        forever_days = 400
         try:
-            await bot.restrict_chat_member(
-                chat_id=chat_id,
-                user_id=cb.from_user.id,
-                permissions=_zero_perms(),
-                until_date=now + forever_days * 24 * 60 * 60,
-            )
+            await _restrict_user_forever(bot, chat_id, cb.from_user.id)
         except Exception as e:
-            log.debug("auto-mute failed: %s", e)
+            log.error("restrict_user_forever failed user_id=%s chat_id=%s: %s", cb.from_user.id, chat_id, e)
+            raise
+
         try:
             await bot.decline_chat_join_request(chat_id=chat_id, user_id=cb.from_user.id)
         except Exception:
@@ -1090,19 +1105,13 @@ async def on_verify(cb: 'CallbackQuery'):
         await _safe_approve(bot, chat_id, cb.from_user.id)
         record_approval(cb.from_user.id, chat_id)
         clear_pending(cb.from_user.id, chat_id)
-        await asyncio.sleep(0.2)  # даём Telegram добросить «участника»
+        await asyncio.sleep(0.3)  # даём Telegram добросить «участника»
         # --- auto-mute newcomer immediately ---
-        now = int(time.time())
-        forever_days = 400
         try:
-            await bot.restrict_chat_member(
-                chat_id=chat_id,
-                user_id=cb.from_user.id,
-                permissions=_zero_perms(),
-                until_date=now + forever_days * 24 * 60 * 60,
-            )
+            await _restrict_user_forever(bot, chat_id, cb.from_user.id)
         except Exception as e:
-            log.debug("auto-mute failed: %s", e)
+            log.error("restrict_user_forever failed user_id=%s chat_id=%s: %s", cb.from_user.id, chat_id, e)
+            raise
         title = chat_title or str(chat_id)
         open_url = await get_group_open_url(chat_id)
         if open_url:
@@ -1232,16 +1241,13 @@ async def expire_old_requests() -> None:
                     log.warning("approve failed user_id=%s chat_id=%s: %s", user_id, chat_id, e)
                 record_approval(user_id, chat_id)
                 await asyncio.sleep(0.3)
-                forever_days = 400
+
                 try:
-                    await bot.restrict_chat_member(
-                        chat_id=chat_id,
-                        user_id=user_id,
-                        permissions=_zero_perms(),
-                        until_date=now + forever_days * 24 * 60 * 60,
-                    )
+                    await _restrict_user_forever(bot, chat_id, user_id)
                 except Exception as e:
-                    log.error("restrict failed user_id=%s chat_id=%s: %s", user_id, chat_id, e)
+                    log.error("expire_old_requests: restrict failed user_id=%s chat_id=%s: %s", user_id, chat_id, e)
+                    raise
+
                 title = chat_title or str(chat_id)
                 open_url = await get_group_open_url(chat_id)
                 if open_url:
