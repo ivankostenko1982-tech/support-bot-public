@@ -58,8 +58,8 @@ def _removed_is_newcomer(user_id: int, chat_id: int) -> bool:
 import os, time, sqlite3, asyncio, logging, html, hmac, re, platform
 from dataclasses import dataclass
 from contextlib import closing
-from typing import Optional, List, Tuple, Set
-from datetime import datetime, timedelta
+from typing import Any
+from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.exceptions import TelegramBadRequest
@@ -466,44 +466,98 @@ def set_pending(user_id: int, chat_id: int, chat_title: str) -> None:
         )
         conn.commit()
 
+# перечисляем только реальные поля ChatPermissions
+_PERMISSION_FLAGS = [
+    "can_send_messages",
+    "can_send_audios",
+    "can_send_documents",
+    "can_send_photos",
+    "can_send_videos",
+    "can_send_video_notes",
+    "can_send_voice_notes",
+    "can_send_polls",
+    "can_send_other_messages",
+    "can_add_web_page_previews",
+    "can_change_info",
+    "can_invite_users",
+    "can_pin_messages",
+    "can_manage_topics",
+]
+
+def _normalize_until(until: Any) -> int:
+    """Приводим until_date к UNIX-времени (секунды UTC)."""
+    if isinstance(until, datetime):
+        if until.tzinfo is None:
+            until = until.replace(tzinfo=timezone.utc)
+        return int(until.timestamp())
+    try:
+        return int(until or 0)
+    except Exception:
+        return 0
+
+def _is_zero_permissions(perms: Any) -> bool:
+    """True, если у участника по сути нет прав на сообщения и действия."""
+    if not perms:
+        return False
+    return not any(bool(getattr(perms, name, False)) for name in _PERMISSION_FLAGS)
+
+def _zero_perms():
+    """Минимальные права: запрет всего — для mute."""
+    from aiogram.types import ChatPermissions
+    return ChatPermissions(  # все поля False/None трактуются как запрет
+        can_send_messages=False,
+        can_send_audios=False,
+        can_send_documents=False,
+        can_send_photos=False,
+        can_send_videos=False,
+        can_send_video_notes=False,
+        can_send_voice_notes=False,
+        can_send_polls=False,
+        can_send_other_messages=False,
+        can_add_web_page_previews=False,
+        can_change_info=False,
+        can_invite_users=False,
+        can_pin_messages=False,
+        can_manage_topics=False,
+    )
+
 async def _is_restricted_now(bot, chat_id: int, user_id: int) -> bool:
     """
-    Считаем «мьют уже есть», если ChatMemberRestricted с until_date далеко в будущем
-    ИЛИ разрешения фактически нулевые (все False).
+    Считаем «мьют уже есть», если:
+      - статус restricted и until_date далеко в будущем (псевдо-навсегда), ИЛИ
+      - статус restricted и права фактически нулевые.
     """
     try:
         cm = await bot.get_chat_member(chat_id, user_id)
     except Exception:
         return False
 
-    # ChatMemberRestricted имеет поля .is_member, .until_date и .can_* через permissions
-    until = getattr(cm, "until_date", 0) or 0
+    status = getattr(cm, "status", None)
+    if status != "restricted":
+        # У обычных участников/админов поле permissions может отсутствовать или быть не тем.
+        return False
+
+    until_ts = _normalize_until(getattr(cm, "until_date", 0))
+    # «навсегда» у Telegram — всё, что > ~366 дней; берём запас в 300.
+    forever_cutoff = int(time.time()) + 300 * 24 * 60 * 60
+    hard_restricted = until_ts >= forever_cutoff
+
     perms = getattr(cm, "permissions", None)
-
-    # «навсегда» у нас ~400 дней
-    forever_cutoff = int(time.time()) + 300 * 24 * 60 * 60  # запас
-    hard_restricted = until and until >= forever_cutoff
-
-    zero_perms = False
-    if perms is not None:
-        # если есть объект ChatPermissions — считаем «нулевые»
-        zero_perms = not any(getattr(perms, k, False) for k in vars(perms))
+    zero_perms = _is_zero_permissions(perms)
 
     return bool(hard_restricted or zero_perms)
-
 
 async def _restrict_forever_with_retry(bot, chat_id: int, user_id: int, attempts: int = 5) -> bool:
     """
     Идемпотентно: сначала проверяем, не замьючен ли уже.
-    Делаем retry с backoff на 429/5xx, на каждый шаг перепроверяем факт мьюта.
+    Делаем retry с экспоненциальным backoff на 429/5xx.
     Возвращаем True, если по итогу пользователь в мьюте.
     """
     if await _is_restricted_now(bot, chat_id, user_id):
         return True
 
     base_sleep = 0.5
-    forever_days = 400
-    until_date = int(time.time()) + forever_days * 24 * 60 * 60
+    until_dt = datetime.now(timezone.utc) + timedelta(days=400)  # > 366 — «навсегда» для Telegram
 
     for i in range(attempts):
         try:
@@ -511,26 +565,35 @@ async def _restrict_forever_with_retry(bot, chat_id: int, user_id: int, attempts
                 chat_id=chat_id,
                 user_id=user_id,
                 permissions=_zero_perms(),
-                until_date=until_date,
+                until_date=until_dt,   # можно int, можно datetime — передаём datetime
             )
-            # проверяем факт
+            # подтверждаем фактом
             if await _is_restricted_now(bot, chat_id, user_id):
                 return True
         except Exception as e:
-            # Специально мягко обрабатываем RetryAfter и 5xx
             msg = str(e).lower()
-            # Retry-логика: 429/5xx/«retry after»
-            if "retry" in msg or "too many requests" in msg or "service unavailable" in msg or "internal" in msg:
+            # простая эвристика под 429/5xx/RetryAfter
+            if (
+                "retry" in msg
+                or "too many requests" in msg
+                or "service unavailable" in msg
+                or "internal" in msg
+                or "timeout" in msg
+                or "bad gateway" in msg
+                or "gateway timeout" in msg
+            ):
                 await asyncio.sleep(base_sleep * (2 ** i))
             else:
-                # Прочие ошибки логируем и выходим из цикла retry
-                logging.warning("restrict failed user_id=%s chat_id=%s attempt=%s err=%s", user_id, chat_id, i+1, e)
+                logging.warning(
+                    "restrict failed user_id=%s chat_id=%s attempt=%s err=%s",
+                    user_id, chat_id, i + 1, e,
+                )
                 break
 
-        # если вдруг без исключения, но факт не подтвердился — небольшой backoff и ещё попытка
+        # если без исключения, но факт не подтвердился — ещё пауза и попытка
         await asyncio.sleep(base_sleep * (2 ** i))
 
-    # последняя проверка на всякий
+    # финальная проверка
     return await _is_restricted_now(bot, chat_id, user_id)
 
 def clear_pending(user_id: int, chat_id: int) -> None:
