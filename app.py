@@ -1395,7 +1395,7 @@ async def expire_old_requests() -> None:
                     marker_mid = pop_verify_marker(chat_id, user_id)
                     if marker_mid:
                         try:
-                            await bot.delete_message(chat_id=chat_id, message_id=marker_mid)
+                            await bot.delete_message(chat_id=user_id, message_id=marker_mid)
                             log.info("expire_old_requests: deleted 'Я человек' mid=%s chat=%s uid=%s", marker_mid, chat_id, user_id)
                         except Exception as e:
                             # не критично (могло уже удалиться/нет прав/просрочка и т.п.)
