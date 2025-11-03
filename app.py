@@ -1551,12 +1551,15 @@ async def main():
             except NameError:
                 _router_candidate = None
         if _router_candidate is not None:
-            if HAS_NEWCOMER_SIDE:
+            if HAS_NEWCOMER_SIDE and os.getenv("NEWCOMER_TEST_ONLY","0").lower() in {"1","true","yes","on"}:
                 try:
                     _nside.init_newcomer_sidecar(_router_candidate)
                     log.info("NEWCOMER_SIDE: attached to router")
                 except Exception as e:
                     log.warning("NEWCOMER_SIDE attach failed: %r", e)
+            else:
+                log.info("NEWCOMER_SIDE: disabled")
+
             if HAS_NEWCOMER_TESTONLY and os.getenv("NEWCOMER_TEST_ONLY","0").lower() in {"1","true","yes","on"}:
                 try:
                     _ntest.setup_newcomer_testonly(_router_candidate, log)
