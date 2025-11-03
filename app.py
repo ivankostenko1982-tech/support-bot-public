@@ -1407,7 +1407,7 @@ async def expire_old_requests() -> None:
                 "Чтобы получить право писать, пройдите проверку у администратора."
             )
             try:
-                await bot.send_message(chat_id=user_id, text=txt, disable_web_page_preview=True)
+                await bot.send_message(chat_id=user_id, text=txt, disable_web_page_preview=False)
             except Exception as e:
                 log.debug("DM to user %s failed: %s", user_id, e)
 
