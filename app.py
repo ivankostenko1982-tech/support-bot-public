@@ -461,6 +461,30 @@ def db_set_setting(key: str, value: str) -> None:
         )
         conn.commit()
 
+def _verify_marker_key(chat_id: int, user_id: int) -> str:
+    return f"verify_marker:{chat_id}:{user_id}"
+
+def save_verify_marker(chat_id: int, user_id: int, message_id: int) -> None:
+    # сохраняем message_id сообщения “Я человек” в settings
+    db_set_setting(_verify_marker_key(chat_id, user_id), str(message_id))
+
+def pop_verify_marker(chat_id: int, user_id: int) -> int | None:
+    # читаем и одновременно "обнуляем" маркер (чтобы не повторять удаление)
+    key = _verify_marker_key(chat_id, user_id)
+    raw = db_get_setting(key)
+    if not raw:
+        return None
+    try:
+        mid = int(raw)
+    except Exception:
+        mid = None
+    # помечаем как пусто (если есть db_del_setting — можно удалить совсем)
+    try:
+        db_set_setting(key, "")
+    except Exception:
+        pass
+    return mid
+
 def set_pending(user_id: int, chat_id: int, chat_title: str) -> None:
     with closing(sqlite3.connect(SQLITE_PATH, timeout=3.0)) as conn:
         conn.execute(
@@ -1049,12 +1073,17 @@ async def on_join_request(event: 'ChatJoinRequest'):
     )
 
     try:
-        await bot.send_message(
+        m = await bot.send_message(
             chat_id=event.from_user.id,
             text=text,
             reply_markup=verify_keyboard(chat_id=event.chat.id, user_id=event.from_user.id),
             disable_web_page_preview=True,
         )
+        # Сохранить id сообщения «Я человек», чтобы потом удалить по TTL
+        try:
+            save_verify_marker(event.chat.id, event.from_user.id, m.message_id)
+        except Exception as e:
+            log.debug("save_verify_marker failed chat=%s uid=%s: %s", event.chat.id, event.from_user.id, e)
     except Exception as e:
         log.info("DM failed (maybe user hasn't started bot yet): %s", e)
 
@@ -1360,6 +1389,19 @@ async def expire_old_requests() -> None:
 
                 # короткая пауза — Telegram добивает статус MEMBER
                 await asyncio.sleep(0.3)
+
+                # удалить исходное «Я человек» в чате, если маркер сохранён
+                try:
+                    marker_mid = pop_verify_marker(chat_id, user_id)
+                    if marker_mid:
+                        try:
+                            await bot.delete_message(chat_id=chat_id, message_id=marker_mid)
+                            log.info("expire_old_requests: deleted 'Я человек' mid=%s chat=%s uid=%s", marker_mid, chat_id, user_id)
+                        except Exception as e:
+                            # не критично (могло уже удалиться/нет прав/просрочка и т.п.)
+                            log.debug("expire_old_requests: delete 'Я человек' failed mid=%s chat=%s uid=%s: %s", marker_mid, chat_id, user_id, e)
+                except Exception as e:
+                    log.debug("expire_old_requests: pop_verify_marker failed chat=%s uid=%s: %s", chat_id, user_id, e)
 
                 # обязательный мьют (respect admin unmute)
                 if is_mute_exempt(user_id, chat_id):
