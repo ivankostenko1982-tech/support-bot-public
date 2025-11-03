@@ -1557,12 +1557,14 @@ async def main():
                     log.info("NEWCOMER_SIDE: attached to router")
                 except Exception as e:
                     log.warning("NEWCOMER_SIDE attach failed: %r", e)
-            if HAS_NEWCOMER_TESTONLY:
+            if HAS_NEWCOMER_TESTONLY and os.getenv("NEWCOMER_TEST_ONLY","0").lower() in {"1","true","yes","on"}:
                 try:
                     _ntest.setup_newcomer_testonly(_router_candidate, log)
                     log.info("NEWCOMER_TESTONLY: attached to router")
                 except Exception as e:
                     log.warning("NEWCOMER_TESTONLY attach failed: %r", e)
+            else:
+                log.info("NEWCOMER_TESTONLY: disabled")
         else:
             log.info("NEWCOMER sidecars: no router variable found; skipping attach")
     except Exception as e:
