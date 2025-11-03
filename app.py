@@ -76,7 +76,6 @@ from aiogram.types import (
     ChatMemberAdministrator, ChatMemberOwner, ChatMember, ChatPermissions, ChatMemberUpdated
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.enums import ChatMemberStatus
 
 # --- Bootstrap: env & DB checks (injected) ---
 import os, sys, sqlite3, time, logging, pathlib
@@ -153,6 +152,12 @@ def _ensure_sqlite_and_schema():
             created_at INTEGER NOT NULL,
             PRIMARY KEY(user_id, chat_id)
         )""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS mute_exempt(
+            user_id INTEGER NOT NULL,
+            chat_id INTEGER NOT NULL,
+            set_at  INTEGER NOT NULL,
+            PRIMARY KEY(user_id, chat_id)
+        )""")
         con.commit()
         con.close()
     except Exception as e:
@@ -212,28 +217,21 @@ def bootstrap_dependencies():
 
 def _db_integrity_check_and_repair():
     """
-    Validate and lightly repair tables used by join-guard.
-    - PRAGMA integrity_check
-    - approvals: drop rows with NULLs; clamp approved_at to sane range [0, now+30d]
-    - pending_requests: ensure created_at sane; drop rows with NULL ids
-    - settings: drop rows with empty id
+    Validate/repair sqlite:
+    - integrity_check
+    - approvals: clamp/normalize approved_at
+    - pending_requests: normalize requested_at (НЕ created_at)
+    - settings: drop broken ids
     """
-    import time, json
-
-import os
-
-def utils_path(name: str) -> str:
-    """Join UTILS_DIR and file name safely."""
-    base = globals().get("UTILS_DIR", "/opt/tgbots/utils")
-    return os.path.join(base, name)
+    import time, sqlite3
     now = int(time.time())
-    max_future = now + 30*24*3600  # 30 days into the future is considered suspicious
+    max_future = now + 30*24*3600
     db_path = os.environ.get("SQLITE_PATH") or os.environ.get("JOIN_GUARD_DB_PATH") or "/opt/tgbots/bots/support/join_guard_state.db"
     try:
         con = sqlite3.connect(db_path, timeout=3.0)
         cur = con.cursor()
 
-        # 1) Integrity check
+        # 1) integrity
         try:
             rows = list(cur.execute("PRAGMA integrity_check"))
             ok_rows = [r[0] for r in rows if isinstance(r, tuple) and r]
@@ -249,48 +247,46 @@ def utils_path(name: str) -> str:
             approved_at INTEGER,
             PRIMARY KEY(user_id, chat_id)
         )""")
-        # Drop broken null-key rows
         cur.execute("DELETE FROM approvals WHERE user_id IS NULL OR chat_id IS NULL")
-        # Fix approved_at non-integers / NULL
-        cur.execute("UPDATE approvals SET approved_at = ? WHERE approved_at IS NULL", (now,))
-        # Clamp too-future values
-        cur.execute("UPDATE approvals SET approved_at = ? WHERE approved_at > ?", (now, max_future))
-        # Clamp negatives
-        cur.execute("UPDATE approvals SET approved_at = 0 WHERE approved_at < 0")
+        cur.execute("UPDATE approvals SET approved_at=? WHERE approved_at IS NULL", (now,))
+        cur.execute("UPDATE approvals SET approved_at=? WHERE approved_at > ?", (now, max_future))
+        cur.execute("UPDATE approvals SET approved_at=0 WHERE approved_at < 0")
 
-        # 3) pending_requests sanity
+        # 3) pending_requests sanity (ИСПОЛЬЗУЕМ requested_at)
         cur.execute("""CREATE TABLE IF NOT EXISTS pending_requests(
             user_id INTEGER NOT NULL,
             chat_id INTEGER NOT NULL,
-            payload TEXT,
-            created_at INTEGER NOT NULL,
+            chat_title TEXT,
+            requested_at INTEGER NOT NULL,
             PRIMARY KEY(user_id, chat_id)
         )""")
         cur.execute("DELETE FROM pending_requests WHERE user_id IS NULL OR chat_id IS NULL")
-        cur.execute("UPDATE pending_requests SET created_at = ? WHERE created_at IS NULL", (now,))
-        cur.execute("UPDATE pending_requests SET created_at = ? WHERE created_at > ?", (now, max_future))
-        cur.execute("UPDATE pending_requests SET created_at = 0 WHERE created_at < 0")
-        # If payload too large, truncate to 64KB to avoid bloating DB
-        try:
-            cur.execute("UPDATE pending_requests SET payload = substr(payload, 1, 65536) WHERE payload IS NOT NULL AND length(payload) > 65536")
-        except Exception:
-            pass
+        cur.execute("UPDATE pending_requests SET requested_at=? WHERE requested_at IS NULL", (now,))
+        cur.execute("UPDATE pending_requests SET requested_at=? WHERE requested_at > ?", (now, max_future))
+        cur.execute("UPDATE pending_requests SET requested_at=0 WHERE requested_at < 0")
 
         # 4) settings sanity
         cur.execute("""CREATE TABLE IF NOT EXISTS settings(
-            id TEXT PRIMARY KEY,
-            value TEXT
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
         )""")
-        cur.execute("DELETE FROM settings WHERE id IS NULL OR trim(id) = ''")
+        cur.execute("DELETE FROM settings WHERE key IS NULL OR trim(key)=''")
 
         con.commit()
         con.close()
         print("[DBCHK] OK: sanity pass complete")
     except Exception as e:
+        try:
+            con.rollback()
+            con.close()
+        except Exception:
+            pass
         print(f"[DBCHK] ERROR: {e}")
 
-
-
+def utils_path(name: str) -> str:
+    base = globals().get("UTILS_DIR", "/opt/tgbots/utils")
+    return os.path.join(base, name)
+    
 
 # Optional systemd watchdog
 try:
@@ -438,6 +434,16 @@ def init_db() -> None:
             )
             """
         )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS mute_exempt (
+                user_id INTEGER NOT NULL,
+                chat_id INTEGER NOT NULL,
+                set_at  INTEGER NOT NULL,
+                PRIMARY KEY (user_id, chat_id)
+            )
+            """
+        )
         conn.commit()
 
 def db_get_setting(key: str) -> Optional[str]:
@@ -473,6 +479,23 @@ def clear_pending(user_id: int, chat_id: int) -> None:
     with closing(sqlite3.connect(SQLITE_PATH, timeout=3.0)) as conn:
         conn.execute("DELETE FROM pending_requests WHERE user_id=? AND chat_id=?", (user_id, chat_id))
         conn.commit()
+
+def mark_mute_exempt(user_id: int, chat_id: int) -> None:
+    with closing(sqlite3.connect(SQLITE_PATH, timeout=3.0)) as conn:
+        conn.execute(
+            "INSERT INTO mute_exempt(user_id, chat_id, set_at) VALUES(?,?,?) "
+            "ON CONFLICT(user_id, chat_id) DO UPDATE SET set_at=excluded.set_at",
+            (user_id, chat_id, int(time.time())),
+        )
+        conn.commit()
+
+def is_mute_exempt(user_id: int, chat_id: int) -> bool:
+    with closing(sqlite3.connect(SQLITE_PATH, timeout=3.0)) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM mute_exempt WHERE user_id=? AND chat_id=?",
+            (user_id, chat_id),
+        ).fetchone()
+        return bool(row)
 
 def record_approval(user_id: int, chat_id: int, _conn: sqlite3.Connection | None = None) -> None:
     own = False
@@ -1122,14 +1145,17 @@ async def on_verify(cb: 'CallbackQuery'):
 
     if int(time.time()) - int(requested_at) > JOIN_REQUEST_TTL:
         clear_pending(cb.from_user.id, chat_id)
-        # --- auto-mute newcomer immediately ---
-        lock = _lock_for(chat_id)
-        async with lock:
-            try:
-                await _restrict_user_forever(bot, chat_id, cb.from_user.id)
-            except Exception as e:
-                log.error("restrict_user_forever failed user_id=%s chat_id=%s: %s", cb.from_user.id, chat_id, e)
-                raise
+        # --- auto-mute newcomer immediately (respect admin unmute) ---
+        if is_mute_exempt(cb.from_user.id, chat_id):
+            log.info("verify: skip restrict due to mute_exempt uid=%s chat=%s", cb.from_user.id, chat_id)
+        else:
+            lock = _lock_for(chat_id)
+            async with lock:
+                try:
+                    await _restrict_user_forever(bot, chat_id, cb.from_user.id)
+                except Exception as e:
+                    log.error("restrict_user_forever failed user_id=%s chat_id=%s: %s", cb.from_user.id, chat_id, e)
+                    raise
 
         try:
             await bot.decline_chat_join_request(chat_id=chat_id, user_id=cb.from_user.id)
@@ -1143,14 +1169,17 @@ async def on_verify(cb: 'CallbackQuery'):
         clear_pending(cb.from_user.id, chat_id)
         await asyncio.sleep(0.3)  # даём Telegram добросить «участника»
 
-        # --- auto-mute newcomer immediately ---
-        lock = _lock_for(chat_id)
-        async with lock:
-            try:
-                await _restrict_user_forever(bot, chat_id, cb.from_user.id)
-            except Exception as e:
-                log.error("restrict_user_forever failed user_id=%s chat_id=%s: %s", cb.from_user.id, chat_id, e)
-                raise
+        # --- auto-mute newcomer immediately (respect admin unmute) ---
+        if is_mute_exempt(cb.from_user.id, chat_id):
+            log.info("verify: skip restrict due to mute_exempt uid=%s chat=%s", cb.from_user.id, chat_id)
+        else:
+            lock = _lock_for(chat_id)
+            async with lock:
+                try:
+                    await _restrict_user_forever(bot, chat_id, cb.from_user.id)
+                except Exception as e:
+                    log.error("restrict_user_forever failed user_id=%s chat_id=%s: %s", cb.from_user.id, chat_id, e)
+                    raise
 
         title = chat_title or str(chat_id)
         open_url = await get_group_open_url(chat_id)
@@ -1258,26 +1287,45 @@ async def newcomer_anti_links_edited(m: 'Message'):
 async def on_chat_member_update(ev: 'ChatMemberUpdated'):
     if ev.chat.type not in {ChatType.GROUP, ChatType.SUPERGROUP}:
         return
+
     new_s = ev.new_chat_member.status
     old_s = ev.old_chat_member.status
-    if new_s == ChatMemberStatus.MEMBER and old_s in {ChatMemberStatus.LEFT, ChatMemberStatus.KICKED, ChatMemberStatus.RESTRICTED}:
-        u = ev.new_chat_member.user
-        if not u or u.is_bot:
-            return
-        chat_id = ev.chat.id
-        user_id = u.id
 
-        # если включён аллоулист — фильтруем
-        if ALLOWLIST and int(chat_id) not in ALLOWLIST:
-            return
+    # интересует момент, когда пользователь становится MEMBER
+    if new_s != ChatMemberStatus.MEMBER:
+        return
 
-        lock = _lock_for(chat_id)
-        async with lock:
-            try:
-                await _restrict_user_forever(bot, chat_id, user_id)
-                log.info("chat_member fallback: restricted user_id=%s chat_id=%s", user_id, chat_id)
-            except Exception as e:
-                log.error("chat_member fallback: restrict failed uid=%s chat=%s: %s", user_id, chat_id, e)
+    u = ev.new_chat_member.user
+    if not u or u.is_bot:
+        return
+
+    chat_id = ev.chat.id
+    user_id = u.id
+
+    # если включён allowlist — проверяем
+    if ALLOWLIST and int(chat_id) not in ALLOWLIST:
+        return
+
+    # 1) если пришёл переход RESTRICTED → MEMBER — это ручной unmute админом
+    if old_s == ChatMemberStatus.RESTRICTED:
+        mark_mute_exempt(user_id, chat_id)  # запоминаем «не мьютить»
+        log.info("chat_member: admin unmuted -> set mute_exempt user_id=%s chat_id=%s", user_id, chat_id)
+        return  # и ничего не делаем дальше
+
+    # 2) если пользователь помечен как «не мьютить» — выходим
+    if is_mute_exempt(user_id, chat_id):
+        log.debug("chat_member: skip restrict due to mute_exempt uid=%s chat=%s", user_id, chat_id)
+        return
+
+    # 3) иначе — обычный автомьют под пер-чатовым замком
+    lock = _lock_for(chat_id)
+    async with lock:
+        try:
+            await _restrict_user_forever(bot, chat_id, user_id)
+            log.info("chat_member fallback: restricted user_id=%s chat_id=%s", user_id, chat_id)
+        except Exception as e:
+            log.error("chat_member fallback: restrict failed uid=%s chat=%s: %s", user_id, chat_id, e)
+
             
 # ── TTL Expirer ────────────────────────────────────────────────────────────────
 async def expire_old_requests() -> None:
@@ -1313,12 +1361,15 @@ async def expire_old_requests() -> None:
                 # короткая пауза — Telegram добивает статус MEMBER
                 await asyncio.sleep(0.3)
 
-                # обязательный мьют
-                try:
-                    await _restrict_user_forever(bot, chat_id, user_id)
-                except Exception as e:
-                    log.error("expire_old_requests: restrict failed user_id=%s chat_id=%s: %s", user_id, chat_id, e)
-                    raise
+                # обязательный мьют (respect admin unmute)
+                if is_mute_exempt(user_id, chat_id):
+                    log.info("expirer: skip restrict due to mute_exempt uid=%s chat=%s", user_id, chat_id)
+                else:
+                    try:
+                        await _restrict_user_forever(bot, chat_id, user_id)
+                    except Exception as e:
+                        log.error("expire_old_requests: restrict failed user_id=%s chat_id=%s: %s", user_id, chat_id, e)
+                        raise
 
                 # запись факта approve + удаление pending — КОРОТКИМ соединением
                 try:
