@@ -1525,14 +1525,17 @@ async def main():
         import logging
         logging.getLogger("support-join-guard").exception("DB CHECK: failed")
     # END PATCH
-    # BEGIN TESTPURGE: register purge watcher
+    # BEGIN TESTPURGE: register purge watcher (disabled unless NEWCOMER_TEST_ONLY=1)
     try:
-        if HAS_WD_PURGE:
+        if HAS_WD_PURGE and os.getenv("NEWCOMER_TEST_ONLY","0").lower() in {"1","true","yes","on"}:
             await _wd_purge.start(bot, dp, log, cmd_router, TEST_CHAT_ID, TEST_USER_ID)
             log.info("TESTPURGE: started for chat=%s uid=%s", TEST_CHAT_ID, TEST_USER_ID)
+        else:
+            log.info("TESTPURGE: disabled")
     except Exception as e:
         log.warning("TESTPURGE start error: %r", e)
     # END TESTPURGE
+
     # BEGIN NEWCOMER SIDECARS (diagnostic only)
     try:
         _router_candidate = None
