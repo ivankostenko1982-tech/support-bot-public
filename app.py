@@ -1511,10 +1511,14 @@ async def main():
     asyncio.create_task(watchdog_task())
 
     try:
-        if HAS_WD:
+        if HAS_WD and os.getenv("TESTUSER_WATCH", "0").lower() in {"1","true","yes","on"}:
             await _wd.start(bot, dp, log, cmd_router, TEST_CHAT_ID, TEST_USER_ID)
+            log.info("TESTUSER WD: started for chat=%s uid=%s", TEST_CHAT_ID, TEST_USER_ID)
+        else:
+            log.info("TESTUSER WD: disabled")
     except Exception as e:
         log.warning("TESTUSER WD start error: %r", e)
+
     # BEGIN PATCH: call DB integrity check before polling
     try:
         import logging
